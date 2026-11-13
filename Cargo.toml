@@ -5,12 +5,10 @@ edition = "2024"
 
 [dependencies]
 axum = "0.8.9"
-base64 = "0.23.0"
 chrono = "0.4.45"
 dotenvy = "0.15.7"
 env_logger = "0.11.11"
 log = "0.4.33"
-maud = { version = "0.27.0", features = ["axum"] }
 quick-xml = { version = "0.41.0", features = ["serialize"] }
 regex = "1.13.1"
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json", "multipart", "form"] }
@@ -18,8 +16,7 @@ rusqlite = { version = "0.40.1", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 strsim = "0.11.1"
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "fs", "process"] }
-tokio-util = { version = "0.7.13", features = ["io"] }
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.7.0", features = ["fs", "cors"] }
 urlencoding = "2.1.3"

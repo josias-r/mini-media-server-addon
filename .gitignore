@@ -1,5 +1,9 @@
 # Dependency directories
 node_modules
+app/node_modules
+app/dist
+app/test-results
+app/playwright-report
 
 # Macos
 .DS_Store
