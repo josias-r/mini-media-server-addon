@@ -4,7 +4,6 @@
 
 - [Docker & Docker Compose](https://docs.docker.com/compose/install/) if you intend to use the dockerized setup - for self hosting.
 - Alternatively, you can run the addon natively with `cargo run` (requires [Rust](https://rustup.rs/)). - for development purposes.
-  - If running natively, ensure you have **ffmpeg** and **ffprobe** installed and accessible in your system's PATH, as they are required for stream remuxing.
 
 ## Using Docker Compose
 

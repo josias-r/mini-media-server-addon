@@ -88,13 +88,26 @@ impl DbClient {
             drop(rows);
             drop(stmt);
 
-            // Generate a random default password if none exists
-            let password = Uuid::new_v4().to_string().replace("-", "")[..12].to_string();
+            // Seed from ADMIN_PASSWORD env var if provided, otherwise generate a random default password
+            let env_password = std::env::var("ADMIN_PASSWORD")
+                .ok()
+                .map(|p| p.trim().to_string())
+                .filter(|p| !p.is_empty());
+            let password = match env_password {
+                Some(p) => {
+                    info!("Initialized admin password from ADMIN_PASSWORD environment variable");
+                    p
+                }
+                None => {
+                    let generated = Uuid::new_v4().to_string().replace("-", "")[..12].to_string();
+                    info!("Generated default admin password: {}", generated);
+                    generated
+                }
+            };
             conn.execute(
                 "INSERT INTO settings (key, value) VALUES ('admin_password', ?)",
                 params![&password],
             )?;
-            info!("Generated default admin password: {}", password);
             Ok(password)
         }
     }

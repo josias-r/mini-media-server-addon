@@ -2,7 +2,7 @@ use crate::cinemeta::get_cinemeta_title;
 use crate::jackett::{JackettResult, TorznabParams, fetch_jackett_results};
 use crate::matcher::find_best_file_match;
 use crate::models::{Stream, StreamResponse};
-use crate::parser::is_definitely_not_full_season;
+use crate::parser::{is_definitely_not_full_season, is_video_file};
 use crate::routes::AppState;
 
 use std::collections::HashSet;
@@ -88,12 +88,7 @@ pub async fn build_stream_response(
             find_best_file_match(&file_infos, expected_title, is_series, season, episode);
 
         for (idx, file) in files.iter().enumerate() {
-            let ext = file.name.rsplit('.').next().unwrap_or("").to_lowercase();
-            let is_video = [".mp4", ".mkv", ".avi", ".webm", ".mov"]
-                .iter()
-                .any(|v| vext_match(&ext, v));
-
-            if is_video {
+            if is_video_file(&file.name) {
                 if let Some(f) = &filter_fn
                     && f(&file.name)
                 {
@@ -197,10 +192,6 @@ pub async fn build_stream_response(
     StreamResponse {
         streams: stream_items.into_iter().map(|item| item.stream).collect(),
     }
-}
-
-fn vext_match(ext: &str, vext: &str) -> bool {
-    vext.ends_with(ext) || format!(".{}", ext) == *vext
 }
 
 pub async fn get_series_params(state: &AppState, stremio_id: &str) -> (bool, u32, u32, String) {

@@ -7,7 +7,6 @@ use serde::Deserialize;
 pub struct JackettResult {
     pub title: String,
     pub tracker: String,
-    // pub tracker_id: String,
     pub link: Option<String>,
     pub magnet_uri: Option<String>,
     pub info_hash: Option<String>,
@@ -119,8 +118,6 @@ struct Attr {
 
 #[derive(Debug, Deserialize)]
 struct JackettIndexer {
-    // #[serde(rename = "@id")]
-    // id: Option<String>,
     #[serde(rename = "$value")]
     name: Option<String>,
 }
@@ -209,11 +206,9 @@ pub async fn fetch_jackett_results(
                 info_hash = Some(hash_part[..end].to_string());
             }
 
-            // let mut tracker_id = String::new();
             let mut tracker_name = "Unknown".to_string();
 
             if let Some(indexer) = item.jackettindexer {
-                // tracker_id = indexer.id.unwrap_or_default();
                 tracker_name = indexer.name.unwrap_or_else(|| "Unknown".to_string());
             }
 
@@ -221,7 +216,6 @@ pub async fn fetch_jackett_results(
                 results.push(JackettResult {
                     title,
                     tracker: tracker_name,
-                    // tracker_id,
                     link,
                     magnet_uri,
                     info_hash,

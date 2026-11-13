@@ -1,4 +1,4 @@
-use crate::parser::is_definitely_wrong_episode;
+use crate::parser::{is_definitely_wrong_episode, is_video_file};
 use strsim::levenshtein;
 
 pub fn find_best_file_match(
@@ -8,21 +8,10 @@ pub fn find_best_file_match(
     season: u32,
     episode: u32,
 ) -> Option<usize> {
-    let video_extensions = [".mp4", ".mkv", ".avi", ".webm", ".mov"];
-
     // 1. Filter out non-videos and wrong episodes
     let mut valid_files = Vec::new();
     for (idx, &(name, size)) in files.iter().enumerate() {
-        let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
-        let mut is_video = false;
-        for vext in &video_extensions {
-            if vext.ends_with(&ext) || format!(".{}", ext) == *vext {
-                is_video = true;
-                break;
-            }
-        }
-
-        if is_video {
+        if is_video_file(name) {
             if is_series && is_definitely_wrong_episode(name, season, episode) {
                 continue;
             }
@@ -33,12 +22,8 @@ pub fn find_best_file_match(
     // Fallback: If no files passed the episode filter, just take all videos
     if valid_files.is_empty() {
         for (idx, &(name, size)) in files.iter().enumerate() {
-            let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
-            for vext in &video_extensions {
-                if vext.ends_with(&ext) || format!(".{}", ext) == *vext {
-                    valid_files.push((idx, name, size));
-                    break;
-                }
+            if is_video_file(name) {
+                valid_files.push((idx, name, size));
             }
         }
     }

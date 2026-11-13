@@ -1,19 +1,18 @@
-use super::AppState;
+use super::{AppState, require_valid_api_key};
 use crate::cinemeta::get_cinemeta_title;
 use crate::jackett::TorznabParams;
 use crate::stream_builder::build_stream_response;
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
     response::{IntoResponse, Json, Response},
 };
 
 pub async fn movie_stream(
     State(state): State<AppState>,
     Path((api_key, id_ext)): Path<(String, String)>,
-) -> Result<impl IntoResponse, Response> {
-    if !state.db.validate_api_key(&api_key) {
-        return Err((StatusCode::UNAUTHORIZED, "Invalid API Key").into_response());
+) -> Response {
+    if let Some(err) = require_valid_api_key(&state, &api_key) {
+        return err;
     }
 
     let id = id_ext.replace(".json", "");
@@ -42,5 +41,5 @@ pub async fn movie_stream(
         &expected_title,
     )
     .await;
-    Ok(Json(response))
+    Json(response).into_response()
 }

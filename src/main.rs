@@ -14,22 +14,6 @@ use log::info;
 use reqwest::Client;
 use std::sync::Arc;
 
-fn check_dependencies() {
-    use std::process::Command;
-
-    if Command::new("ffmpeg").arg("-version").output().is_err() {
-        panic!(
-            "ERROR: ffmpeg is not installed or not in PATH. It is required for stream remuxing."
-        );
-    }
-
-    if Command::new("ffprobe").arg("-version").output().is_err() {
-        panic!(
-            "ERROR: ffprobe is not installed or not in PATH. It is required for stream remuxing."
-        );
-    }
-}
-
 #[tokio::main]
 async fn main() {
     // Initialize env_logger with a default filter if RUST_LOG is not set
@@ -37,8 +21,6 @@ async fn main() {
         env_logger::Env::default().default_filter_or("info,mini_media_server_addon=debug"),
     )
     .init();
-
-    check_dependencies();
 
     let config = config::Config::load();
     let qbit = qbittorrent::QbitClient::new(config.clone());

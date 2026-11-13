@@ -1,4 +1,4 @@
-use super::AppState;
+use super::{AppState, require_valid_api_key};
 use crate::matcher::find_best_file_match;
 use crate::stream_builder::get_series_params;
 use axum::{
@@ -16,8 +16,8 @@ pub async fn trigger_download(
     Query(params): Query<HashMap<String, String>>,
     req: Request,
 ) -> Response {
-    if !state.db.validate_api_key(&api_key) {
-        return (axum::http::StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(err) = require_valid_api_key(&state, &api_key) {
+        return err;
     }
 
     let _ = state

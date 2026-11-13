@@ -5,7 +5,6 @@ edition = "2024"
 
 [dependencies]
 axum = "0.8.9"
-base64 = "0.23.0"
 chrono = "0.4.45"
 dotenvy = "0.15.7"
 env_logger = "0.11.11"
@@ -17,8 +16,7 @@ rusqlite = { version = "0.40.1", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 strsim = "0.11.1"
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "fs", "process"] }
-tokio-util = { version = "0.7.13", features = ["io"] }
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.7.0", features = ["fs", "cors"] }
 urlencoding = "2.1.3"

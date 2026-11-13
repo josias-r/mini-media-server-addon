@@ -16,30 +16,28 @@ import {
   KeyRound,
   Link2,
   Loader2,
-  Lock,
   LogOut,
   Pause,
   Play,
   RefreshCw,
   Search,
   Server,
-  ShieldAlert,
   Trash2,
   UserPlus,
   Users,
   X,
 } from "lucide-preact";
 import {
-  adminLogin,
   adminLogout,
   checkAdminSession,
   createUser,
   deleteTorrent,
   deleteUser,
   fetchAdminOverview,
-  updateAdminPassword,
 } from "../api";
+import { AdminLogin } from "../components/AdminLogin";
 import { Badge } from "../components/Badge";
+import { PasswordModal } from "../components/PasswordModal";
 import type { AdminOverview, CreatedUserResponse } from "../types";
 import {
   buildInviteUrl,
@@ -63,10 +61,6 @@ type TorrentSort = "added_desc" | "added_asc" | "size_desc" | "watched_desc" | "
 export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
   const authChecked = useSignal(false);
   const authenticated = useSignal(false);
-  const loginPassword = useSignal("");
-  const showLoginPassword = useSignal(false);
-  const loginLoading = useSignal(false);
-  const loginError = useSignal<string | null>(null);
 
   const overview = useSignal<AdminOverview | null>(null);
   const loadingOverview = useSignal(false);
@@ -90,10 +84,6 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
   const deletingHash = useSignal<string | null>(null);
 
   const passwordModalOpen = useSignal(false);
-  const newAdminPassword = useSignal("");
-  const confirmAdminPassword = useSignal("");
-  const passwordSaving = useSignal(false);
-  const passwordFeedback = useSignal<{ type: "ok" | "err"; text: string } | null>(null);
 
   const effectivePublicUrl = useComputed(() => {
     const configured = overview.value?.config.public_url?.trim();
@@ -215,23 +205,6 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
     return () => window.clearInterval(id);
   }, [authenticated.value, autoRefresh.value]);
 
-  async function handleLogin(e: Event) {
-    e.preventDefault();
-    if (!loginPassword.value) return;
-    loginLoading.value = true;
-    loginError.value = null;
-    try {
-      await adminLogin(loginPassword.value);
-      loginPassword.value = "";
-      authenticated.value = true;
-      await loadOverview();
-    } catch (err) {
-      loginError.value = err instanceof Error ? err.message : "Invalid password";
-    } finally {
-      loginLoading.value = false;
-    }
-  }
-
   async function handleLogout() {
     try {
       await adminLogout();
@@ -289,34 +262,6 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
     }
   }
 
-  async function handlePasswordSave(e: Event) {
-    e.preventDefault();
-    passwordFeedback.value = null;
-    if (newAdminPassword.value.length < 4) {
-      passwordFeedback.value = { type: "err", text: "Password must be at least 4 characters." };
-      return;
-    }
-    if (newAdminPassword.value !== confirmAdminPassword.value) {
-      passwordFeedback.value = { type: "err", text: "Passwords do not match." };
-      return;
-    }
-
-    passwordSaving.value = true;
-    try {
-      await updateAdminPassword(newAdminPassword.value);
-      newAdminPassword.value = "";
-      confirmAdminPassword.value = "";
-      passwordFeedback.value = { type: "ok", text: "Admin password updated successfully." };
-    } catch (err) {
-      passwordFeedback.value = {
-        type: "err",
-        text: err instanceof Error ? err.message : "Failed to update password",
-      };
-    } finally {
-      passwordSaving.value = false;
-    }
-  }
-
   async function triggerCopy(token: string, value: string) {
     const ok = await copyToClipboard(value);
     if (ok) {
@@ -354,81 +299,13 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
 
   if (!authenticated.value) {
     return (
-      <div class="relative flex min-h-screen items-center justify-center px-4">
-        <div class="pointer-events-none fixed inset-0 -z-10 bg-[radial-gradient(circle_at_top,_rgba(99,102,241,0.15),transparent_50%)]" />
-        <div class="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900/80 p-7 shadow-2xl shadow-black/50 backdrop-blur-md">
-          <div class="mb-6 flex flex-col items-center text-center">
-            <div class="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 shadow-lg shadow-indigo-500/25">
-              <Lock class="h-6 w-6 text-white" />
-            </div>
-            <h1 class="text-xl font-bold text-white">Admin Control Center</h1>
-            <p class="mt-1 text-sm text-slate-400">
-              Sign in with the admin password generated in server logs.
-            </p>
-          </div>
-
-          {loginError.value && (
-            <div class="mb-4 flex items-center gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3.5 py-2.5 text-sm text-rose-300">
-              <ShieldAlert class="h-4 w-4 shrink-0" />
-              <span>{loginError.value}</span>
-            </div>
-          )}
-
-          <form onSubmit={handleLogin} class="space-y-4">
-            <div>
-              <label for="admin-password" class="mb-1.5 block text-xs font-medium text-slate-300">
-                Admin Password
-              </label>
-              <div class="relative">
-                <input
-                  id="admin-password"
-                  type={(showLoginPassword.value ? "text" : "password") as "text"}
-                  value={loginPassword.value}
-                  onInput={(e) => {
-                    loginPassword.value = (e.target as HTMLInputElement).value;
-                  }}
-                  required
-                  autofocus
-                  placeholder="Enter admin password"
-                  class="w-full rounded-xl border border-slate-700 bg-slate-950 py-2.5 pr-11 pl-3.5 text-sm text-white placeholder-slate-500 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    showLoginPassword.value = !showLoginPassword.value;
-                  }}
-                  class="absolute inset-y-0 right-2 flex items-center px-1.5 text-slate-400 hover:text-slate-200"
-                >
-                  {showLoginPassword.value ? <EyeOff class="h-4 w-4" /> : <Eye class="h-4 w-4" />}
-                </button>
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              disabled={loginLoading.value}
-              class="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-600/20 transition hover:bg-indigo-500 disabled:opacity-60"
-            >
-              {loginLoading.value && <Loader2 class="h-4 w-4 animate-spin" />}
-              Sign In
-            </button>
-          </form>
-
-          <div class="mt-6 text-center">
-            <a
-              href="/"
-              onClick={(e) => {
-                e.preventDefault();
-                onNavigate("/");
-              }}
-              class="inline-flex items-center gap-1.5 text-xs text-slate-400 transition hover:text-white"
-            >
-              <ArrowLeft class="h-3.5 w-3.5" />
-              Back to User Portal
-            </a>
-          </div>
-        </div>
-      </div>
+      <AdminLogin
+        onSuccess={async () => {
+          authenticated.value = true;
+          await loadOverview();
+        }}
+        onNavigate={onNavigate}
+      />
     );
   }
 
@@ -496,7 +373,6 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
             <button
               type="button"
               onClick={() => {
-                passwordFeedback.value = null;
                 passwordModalOpen.value = true;
               }}
               class="inline-flex items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-slate-300 transition hover:border-slate-700 hover:text-white"
@@ -1083,93 +959,12 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
         </section>
       </main>
 
-      {/* Change Admin Password Modal */}
       {passwordModalOpen.value && (
-        <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
-          <div class="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900 p-6 shadow-2xl">
-            <div class="mb-4 flex items-center justify-between">
-              <div class="flex items-center gap-2">
-                <KeyRound class="h-5 w-5 text-indigo-400" />
-                <h3 class="text-base font-semibold text-white">Change Admin Password</h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  passwordModalOpen.value = false;
-                }}
-                class="rounded-lg p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
-              >
-                <X class="h-4 w-4" />
-              </button>
-            </div>
-
-            {passwordFeedback.value && (
-              <div
-                class={`mb-4 rounded-xl border px-3.5 py-2.5 text-xs font-medium ${
-                  passwordFeedback.value.type === "ok"
-                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-                    : "border-rose-500/30 bg-rose-500/10 text-rose-300"
-                }`}
-              >
-                {passwordFeedback.value.text}
-              </div>
-            )}
-
-            <form onSubmit={handlePasswordSave} class="space-y-4">
-              <div>
-                <label class="mb-1 block text-xs font-medium text-slate-300">New Password</label>
-                <input
-                  type="password"
-                  value={newAdminPassword.value}
-                  onInput={(e) => {
-                    newAdminPassword.value = (e.target as HTMLInputElement).value;
-                  }}
-                  required
-                  minLength={4}
-                  placeholder="At least 4 characters"
-                  class="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 text-sm text-white placeholder-slate-500 outline-none focus:border-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label class="mb-1 block text-xs font-medium text-slate-300">
-                  Confirm New Password
-                </label>
-                <input
-                  type="password"
-                  value={confirmAdminPassword.value}
-                  onInput={(e) => {
-                    confirmAdminPassword.value = (e.target as HTMLInputElement).value;
-                  }}
-                  required
-                  minLength={4}
-                  placeholder="Repeat new password"
-                  class="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 text-sm text-white placeholder-slate-500 outline-none focus:border-indigo-500"
-                />
-              </div>
-
-              <div class="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    passwordModalOpen.value = false;
-                  }}
-                  class="rounded-xl border border-slate-700 px-4 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800"
-                >
-                  Close
-                </button>
-                <button
-                  type="submit"
-                  disabled={passwordSaving.value}
-                  class="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-60"
-                >
-                  {passwordSaving.value && <Loader2 class="h-3.5 w-3.5 animate-spin" />}
-                  Save Password
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+        <PasswordModal
+          onClose={() => {
+            passwordModalOpen.value = false;
+          }}
+        />
       )}
     </div>
   );

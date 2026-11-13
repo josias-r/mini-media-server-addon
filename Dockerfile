@@ -26,8 +26,8 @@ RUN cargo build --release --bin mini-media-server-addon
 FROM debian:bookworm-slim
 WORKDIR /app
 
-# Install ca-certificates for reqwest to make HTTPS requests and ffmpeg for stream remuxing
-RUN apt-get update && apt-get install -y ca-certificates ffmpeg && rm -rf /var/lib/apt/lists/*
+# Install ca-certificates for reqwest to make HTTPS requests
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 
 # Copy the compiled binary, static frontend assets, and placeholder video
 COPY --from=builder /app/target/release/mini-media-server-addon /app/mini-media-server-addon

@@ -1,4 +1,4 @@
-use super::AppState;
+use super::{AppState, require_valid_api_key};
 use axum::{
     extract::{Path, Query, State},
     response::{IntoResponse, Redirect, Response},
@@ -10,8 +10,8 @@ pub async fn play_file(
     Path((api_key, _stremio_id, info_hash)): Path<(String, String, String)>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
-    if !state.db.validate_api_key(&api_key) {
-        return (axum::http::StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(err) = require_valid_api_key(&state, &api_key) {
+        return err;
     }
 
     let _ = state

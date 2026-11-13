@@ -10,7 +10,8 @@
     "lint": "oxlint",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@preact/signals": "^2.11.4",
@@ -18,6 +19,7 @@
     "preact": "^11.2.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.0",
     "@tailwindcss/vite": "^4.3.5",
     "oxfmt": "^0.78.0",
     "oxlint": "^1.93.0",
