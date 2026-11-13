@@ -52,7 +52,7 @@ services:
     restart: unless-stopped
 
   addon-server:
-    image: ghcr.io/josias-r/mini-media-server-addon:0.0.17
+    image: ghcr.io/josias-r/mini-media-server-addon:0.0.20 # x-release-please-version
     environment:
       PORT: 7000
       PUBLIC_URL: *public_url
