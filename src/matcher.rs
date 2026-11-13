@@ -48,7 +48,8 @@ pub fn find_best_file_match(
     let mut best_score: Option<(usize, u64)> = None;
 
     for (i, &(_idx, name, size)) in valid_files.iter().enumerate() {
-        let filename_lower = name.to_lowercase();
+        let basename = name.rsplit(['/', '\\']).next().unwrap_or(name);
+        let filename_lower = basename.to_lowercase();
         let filename_tokens: Vec<&str> = filename_lower
             .split(|c: char| !c.is_alphanumeric())
             .filter(|s| !s.is_empty())
@@ -92,4 +93,75 @@ pub fn find_best_file_match(
 
     let (chosen_idx, _, _) = valid_files[best_idx];
     Some(chosen_idx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn picks_requested_episode_from_avatar_season_pack_despite_smaller_size() {
+        let files = vec![
+            ("[TGx]Downloaded from torrentgalaxy.to .txt", 479),
+            (
+                "Avatar.The.Last.Airbender.S01.COMPLETE.1080p.NF.WEB-DL.DDP5.1.x264-LiTTLEBLUEMAN[TGx]/Avatar.The.Last.Airbender.S01E01.Aang.1080p.NF.WEB-DL.DDP5.1.x264-NTb.mkv",
+                2_555_000_000,
+            ),
+            (
+                "Avatar.The.Last.Airbender.S01.COMPLETE.1080p.NF.WEB-DL.DDP5.1.x264-LiTTLEBLUEMAN[TGx]/Avatar.The.Last.Airbender.S01E02.Warriors.1080p.NF.WEB-DL.DDP5.1.x264-NTb.mkv",
+                1_900_000_000,
+            ),
+            (
+                "Avatar.The.Last.Airbender.S01.COMPLETE.1080p.NF.WEB-DL.DDP5.1.x264-LiTTLEBLUEMAN[TGx]/Avatar.The.Last.Airbender.S01E08.Legends.1080p.NF.WEB-DL.DDP5.1.x264-NTb.mkv",
+                3_414_000_000,
+            ),
+            ("NEW upcoming releases by Xclusive.txt", 71),
+        ];
+
+        let matched = find_best_file_match(&files, "Avatar: The Last Airbender S01E02", true, 1, 2);
+        assert_eq!(matched, Some(2));
+    }
+
+    #[test]
+    fn picks_requested_episode_from_bocchi_season_pack() {
+        let files = vec![
+            (
+                "Bocchi.The.Rock.S01.1080p.BluRay.AV1.Opus.2.0-dAV1nci/Bocchi.The.Rock.S01E01.1080p.BluRay.AV1.Opus.2.0-dAV1nci.mkv",
+                263_313_996,
+            ),
+            (
+                "Bocchi.The.Rock.S01.1080p.BluRay.AV1.Opus.2.0-dAV1nci/Bocchi.The.Rock.S01E02.1080p.BluRay.AV1.Opus.2.0-dAV1nci.mkv",
+                270_033_864,
+            ),
+            (
+                "Bocchi.The.Rock.S01.1080p.BluRay.AV1.Opus.2.0-dAV1nci/Bocchi.The.Rock.S01E03.1080p.BluRay.AV1.Opus.2.0-dAV1nci.mkv",
+                314_039_932,
+            ),
+        ];
+
+        let matched = find_best_file_match(&files, "Bocchi the Rock! S01E02", true, 1, 2);
+        assert_eq!(matched, Some(1));
+    }
+
+    #[test]
+    fn picks_requested_episode_with_bare_numbering_and_folder_ranges() {
+        let bare_files = vec![
+            ("Show.S01/01 - Pilot.mkv", 500_000_000),
+            ("Show.S01/02 - Warriors.mkv", 350_000_000),
+            ("Show.S01/03 - Omashu.mkv", 450_000_000),
+        ];
+        assert_eq!(
+            find_best_file_match(&bare_files, "Show S01E02", true, 1, 2),
+            Some(1)
+        );
+
+        let folder_range_files = vec![
+            ("Show.S01E01-E08/Show.S01E01.mkv", 500_000_000),
+            ("Show.S01E01-E08/Show.S01E02.mkv", 350_000_000),
+        ];
+        assert_eq!(
+            find_best_file_match(&folder_range_files, "Show S01E02", true, 1, 2),
+            Some(1)
+        );
+    }
 }

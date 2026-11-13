@@ -1,7 +1,9 @@
 use crate::config::Config;
-use log::{debug, error};
+use crate::jackett::extract_btih_hex;
+use log::{debug, error, warn};
 use reqwest::{Client, multipart};
 use serde::{Deserialize, Serialize};
+use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
@@ -35,6 +37,8 @@ pub struct QbitTorrent {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct QbitFile {
+    #[serde(default)]
+    pub index: Option<usize>,
     pub name: String,
     pub size: u64,
     pub progress: f64,
@@ -134,18 +138,11 @@ impl QbitClient {
         }
     }
 
-    pub async fn add_torrent(&self, magnet_uri: &str, tag: &str) -> bool {
+    async fn send_add_torrent_form(&self, form: multipart::Form) -> bool {
         let sid = match self.get_session_cookie().await {
             Some(s) => s,
             None => return false,
         };
-
-        debug!("Adding torrent to qBittorrent with tag: {}", tag);
-        let form = multipart::Form::new()
-            .text("urls", magnet_uri.to_string())
-            .text("tags", tag.to_string())
-            .text("sequentialDownload", "true")
-            .text("firstLastPiecePrio", "true");
 
         let url = format!("{}/api/v2/torrents/add", self.config.qbittorrent_url);
         match self
@@ -169,6 +166,133 @@ impl QbitClient {
                 false
             }
         }
+    }
+
+    pub async fn add_torrent(&self, magnet_uri: &str, tag: &str) -> bool {
+        debug!("Adding torrent to qBittorrent with tag: {}", tag);
+        let form = multipart::Form::new()
+            .text("urls", magnet_uri.to_string())
+            .text("tags", tag.to_string())
+            .text("sequentialDownload", "true")
+            .text("firstLastPiecePrio", "true");
+
+        self.send_add_torrent_form(form).await
+    }
+
+    pub async fn add_torrent_bytes(&self, torrent_bytes: Vec<u8>, tag: &str) -> bool {
+        debug!(
+            "Adding .torrent bytes ({} bytes) to qBittorrent with tag: {}",
+            torrent_bytes.len(),
+            tag
+        );
+        let part = multipart::Part::bytes(torrent_bytes)
+            .file_name("torrent.torrent")
+            .mime_str("application/x-bittorrent")
+            .unwrap();
+        let form = multipart::Form::new()
+            .part("torrents", part)
+            .text("tags", tag.to_string())
+            .text("sequentialDownload", "true")
+            .text("firstLastPiecePrio", "true");
+
+        self.send_add_torrent_form(form).await
+    }
+
+    /// Resolves a magnet URI or Jackett/HTTP `.torrent` download URL (including HTTP redirects
+    /// to `magnet:` links or `.torrent` payloads), extracts or computes the 40-char hex
+    /// `info_hash` when possible, and submits the torrent to qBittorrent.
+    pub async fn resolve_and_add_torrent(
+        &self,
+        magnet_or_url: &str,
+        tag: &str,
+        known_hash: Option<&str>,
+    ) -> Option<String> {
+        let initial_hash = known_hash
+            .map(str::trim)
+            .filter(|h| h.len() == 40 && h.chars().all(|c| c.is_ascii_hexdigit()))
+            .map(str::to_lowercase);
+
+        if magnet_or_url.starts_with("magnet:") {
+            let extracted = extract_btih_hex(magnet_or_url);
+            self.add_torrent(magnet_or_url, tag).await;
+            return extracted.or(initial_hash);
+        }
+
+        if magnet_or_url.starts_with("http://") || magnet_or_url.starts_with("https://") {
+            let http_client = Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(Duration::from_secs(30))
+                .build()
+                .ok();
+
+            if let Some(http) = http_client {
+                let mut current_url = magnet_or_url.to_string();
+                for _ in 0..5 {
+                    match http.get(&current_url).send().await {
+                        Ok(res) if res.status().is_redirection() => {
+                            let Some(location) = res
+                                .headers()
+                                .get(reqwest::header::LOCATION)
+                                .and_then(|v| v.to_str().ok())
+                            else {
+                                break;
+                            };
+
+                            if location.starts_with("magnet:") {
+                                let extracted = extract_btih_hex(location);
+                                self.add_torrent(location, tag).await;
+                                return extracted.or(initial_hash);
+                            }
+
+                            if let Ok(next_url) = res.url().join(location) {
+                                current_url = next_url.to_string();
+                            } else {
+                                break;
+                            }
+                        }
+                        Ok(res) if res.status().is_success() => {
+                            if let Ok(bytes) = res.bytes().await {
+                                if let Ok(text) = std::str::from_utf8(&bytes) {
+                                    let trimmed = text.trim();
+                                    if trimmed.starts_with("magnet:") {
+                                        let extracted = extract_btih_hex(trimmed);
+                                        self.add_torrent(trimmed, tag).await;
+                                        return extracted.or(initial_hash);
+                                    }
+                                }
+
+                                let computed_hash = compute_torrent_info_hash(&bytes);
+                                if computed_hash.is_some() || bytes.starts_with(b"d") {
+                                    self.add_torrent_bytes(bytes.to_vec(), tag).await;
+                                    return computed_hash.or(initial_hash);
+                                }
+                                warn!(
+                                    "Unexpected non-torrent payload ({} bytes) from {}",
+                                    bytes.len(),
+                                    current_url
+                                );
+                            }
+                            break;
+                        }
+                        Ok(res) => {
+                            warn!(
+                                "Failed to resolve torrent URL {} (status: {})",
+                                current_url,
+                                res.status()
+                            );
+                            break;
+                        }
+                        Err(e) => {
+                            warn!("Error resolving torrent URL {}: {}", current_url, e);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        self.add_torrent(magnet_or_url, tag).await;
+        initial_hash
     }
 
     pub async fn get_torrents_by_tag(&self, tag: &str) -> Vec<QbitTorrent> {
@@ -388,5 +512,191 @@ impl QbitClient {
 
     pub async fn check_health(&self) -> bool {
         self.get_session_cookie().await.is_some()
+    }
+}
+
+const MAX_BENCODE_DEPTH: usize = 64;
+
+fn parse_bencode_bytes(data: &[u8], pos: usize) -> Option<(&[u8], usize)> {
+    let slice = data.get(pos..)?;
+    let colon_rel = slice.iter().position(|&b| b == b':')?;
+    if colon_rel == 0 {
+        return None;
+    }
+    let len_str = std::str::from_utf8(&slice[..colon_rel]).ok()?;
+    if !len_str.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let len: usize = len_str.parse().ok()?;
+    let start = pos.checked_add(colon_rel + 1)?;
+    let end = start.checked_add(len)?;
+    let bytes = data.get(start..end)?;
+    Some((bytes, end))
+}
+
+fn skip_bencode_value(data: &[u8], pos: usize, depth: usize) -> Option<usize> {
+    if depth >= MAX_BENCODE_DEPTH {
+        return None;
+    }
+    let tag = *data.get(pos)?;
+    match tag {
+        b'i' => {
+            let mut cur = pos + 1;
+            if data.get(cur) == Some(&b'-') {
+                cur += 1;
+            }
+            let digits_start = cur;
+            while let Some(&b) = data.get(cur) {
+                if b == b'e' {
+                    return (cur > digits_start).then_some(cur + 1);
+                }
+                if !b.is_ascii_digit() {
+                    return None;
+                }
+                cur += 1;
+            }
+            None
+        }
+        b'l' => {
+            let mut cur = pos + 1;
+            while *data.get(cur)? != b'e' {
+                cur = skip_bencode_value(data, cur, depth + 1)?;
+            }
+            Some(cur + 1)
+        }
+        b'd' => {
+            let mut cur = pos + 1;
+            while *data.get(cur)? != b'e' {
+                let (_, next) = parse_bencode_bytes(data, cur)?;
+                cur = skip_bencode_value(data, next, depth + 1)?;
+            }
+            Some(cur + 1)
+        }
+        b'0'..=b'9' => {
+            let (_, next) = parse_bencode_bytes(data, pos)?;
+            Some(next)
+        }
+        _ => None,
+    }
+}
+
+fn sha1_hex(data: &[u8]) -> String {
+    let mut h: [u32; 5] = [
+        0x6745_2301,
+        0xEFCD_AB89,
+        0x98BA_DCFE,
+        0x1032_5476,
+        0xC3D2_E1F0,
+    ];
+
+    let bit_len = (data.len() as u64).wrapping_mul(8);
+    let mut padded = Vec::with_capacity((data.len() + 9).div_ceil(64) * 64);
+    padded.extend_from_slice(data);
+    padded.push(0x80);
+    while padded.len() % 64 != 56 {
+        padded.push(0);
+    }
+    padded.extend_from_slice(&bit_len.to_be_bytes());
+
+    for block in padded.chunks_exact(64) {
+        let mut w = [0u32; 80];
+        for (slot, chunk) in w[..16].iter_mut().zip(block.chunks_exact(4)) {
+            *slot = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        }
+        for i in 16..80 {
+            w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
+        }
+
+        let [mut a, mut b, mut c, mut d, mut e] = h;
+        for (i, &word) in w.iter().enumerate() {
+            let (f, k) = match i {
+                0..=19 => ((b & c) | ((!b) & d), 0x5A82_7999),
+                20..=39 => (b ^ c ^ d, 0x6ED9_EBA1),
+                40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1B_BCDC),
+                _ => (b ^ c ^ d, 0xCA62_C1D6),
+            };
+            let temp = a
+                .rotate_left(5)
+                .wrapping_add(f)
+                .wrapping_add(e)
+                .wrapping_add(k)
+                .wrapping_add(word);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = temp;
+        }
+
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+    }
+
+    let mut out = String::with_capacity(40);
+    for word in h {
+        let _ = write!(&mut out, "{word:08x}");
+    }
+    out
+}
+
+/// Computes the 40-character lowercase hex BitTorrent v1 `info_hash` (SHA-1 of the raw
+/// bencoded `info` dictionary) from `.torrent` file bytes.
+pub fn compute_torrent_info_hash(torrent_bytes: &[u8]) -> Option<String> {
+    if torrent_bytes.first() != Some(&b'd') {
+        return None;
+    }
+
+    let mut pos = 1;
+    while *torrent_bytes.get(pos)? != b'e' {
+        let (key, val_start) = parse_bencode_bytes(torrent_bytes, pos)?;
+        let val_end = skip_bencode_value(torrent_bytes, val_start, 0)?;
+        if key == b"info" {
+            return Some(sha1_hex(&torrent_bytes[val_start..val_end]));
+        }
+        pos = val_end;
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sha1_matches_standard_vectors() {
+        assert_eq!(sha1_hex(b""), "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+        assert_eq!(sha1_hex(b"abc"), "a9993e364706816aba3e25717850c26c9cd0d89d");
+    }
+
+    #[test]
+    fn computes_info_hash_from_bencoded_torrent() {
+        let info_dict = b"d6:lengthi1234e4:name8:test.mkv12:piece lengthi16384e6:pieces20:01234567890123456789e";
+        let mut torrent = Vec::new();
+        torrent.extend_from_slice(b"d8:announce23:http://tracker/announce4:info");
+        torrent.extend_from_slice(info_dict);
+        torrent.push(b'e');
+
+        let expected = sha1_hex(info_dict);
+        assert_eq!(compute_torrent_info_hash(&torrent), Some(expected));
+    }
+
+    #[test]
+    fn computes_info_hash_for_multi_file_torrent_and_rejects_invalid() {
+        let info_dict = b"d5:filesld6:lengthi100e4:pathl4:ep01eed6:lengthi200e4:pathl4:ep02eee4:name4:Show12:piece lengthi16384e6:pieces20:abcdefghijklmnopqrste";
+        let mut torrent = Vec::new();
+        torrent.extend_from_slice(b"d7:comment5:hello4:info");
+        torrent.extend_from_slice(info_dict);
+        torrent.extend_from_slice(b"7:privatei0ee");
+
+        assert_eq!(
+            compute_torrent_info_hash(&torrent),
+            Some(sha1_hex(info_dict))
+        );
+        assert_eq!(compute_torrent_info_hash(b"not-bencode"), None);
+        assert_eq!(compute_torrent_info_hash(b"d4:name3:abce"), None);
     }
 }

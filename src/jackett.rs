@@ -172,7 +172,7 @@ pub async fn fetch_jackett_results(
             let link = item.link.clone();
 
             let enclosure_url = item.enclosure.and_then(|e| e.url);
-            let magnet_uri = if let Some(url) = enclosure_url.clone() {
+            let mut magnet_uri = if let Some(url) = enclosure_url.clone() {
                 if url.starts_with("magnet:") {
                     Some(url)
                 } else {
@@ -184,26 +184,40 @@ pub async fn fetch_jackett_results(
 
             let mut seeders = 0;
             let mut info_hash = None;
+            let mut magnet_attr = None;
 
             for attr in item.attrs {
                 if let (Some(name), Some(value)) = (attr.name, attr.value) {
                     if name == "seeders" {
                         seeders = value.parse().unwrap_or(0);
                     } else if name == "infohash" {
-                        info_hash = Some(value.trim().to_lowercase());
+                        let trimmed = value.trim().to_lowercase();
+                        if !trimmed.is_empty() {
+                            info_hash = Some(trimmed);
+                        }
+                    } else if name == "magneturl" {
+                        let trimmed = value.trim();
+                        if trimmed.starts_with("magnet:") {
+                            magnet_attr = Some(trimmed.to_string());
+                        }
                     }
                 }
+            }
+
+            if let Some(m) = magnet_attr
+                && !magnet_uri
+                    .as_deref()
+                    .is_some_and(|u| u.starts_with("magnet:"))
+            {
+                magnet_uri = Some(m);
             }
 
             // Fallback: Try to extract info_hash from magnet_uri if missing
             if info_hash.is_none()
                 && let Some(ref magnet) = magnet_uri
                 && magnet.starts_with("magnet:")
-                && let Some(start) = magnet.find("urn:btih:")
             {
-                let hash_part = &magnet[start + 9..];
-                let end = hash_part.find('&').unwrap_or(hash_part.len());
-                info_hash = Some(hash_part[..end].trim().to_lowercase());
+                info_hash = extract_btih_hex(magnet);
             }
 
             let mut tracker_name = "Unknown".to_string();
@@ -234,4 +248,90 @@ pub async fn fetch_jackett_results(
 
     results.sort_by_key(|b| std::cmp::Reverse(b.seeders));
     results
+}
+
+fn decode_base32_btih(encoded: &str) -> Option<String> {
+    if encoded.len() != 32 {
+        return None;
+    }
+
+    let mut bytes = [0u8; 20];
+    let mut buffer: u32 = 0;
+    let mut bits_left: u8 = 0;
+    let mut out_idx = 0;
+
+    for b in encoded.bytes() {
+        let upper = b.to_ascii_uppercase();
+        let val = match upper {
+            b'A'..=b'Z' => upper - b'A',
+            b'2'..=b'7' => upper - b'2' + 26,
+            _ => return None,
+        };
+        buffer = (buffer << 5) | u32::from(val);
+        bits_left += 5;
+        if bits_left >= 8 {
+            bits_left -= 8;
+            bytes[out_idx] = ((buffer >> bits_left) & 0xff) as u8;
+            out_idx += 1;
+        }
+    }
+
+    let mut hex = String::with_capacity(40);
+    for byte in bytes {
+        use std::fmt::Write;
+        let _ = write!(&mut hex, "{byte:02x}");
+    }
+    Some(hex)
+}
+
+/// Extracts a 40-character lowercase hex BitTorrent info_hash from a URI containing `urn:btih:`.
+/// Supports both 40-character hex and 32-character RFC 4648 Base32 hashes.
+pub fn extract_btih_hex(uri: &str) -> Option<String> {
+    let lower = uri.to_ascii_lowercase();
+    let start = lower.find("urn:btih:")?;
+    let hash_part = &uri[start + 9..];
+    let end = hash_part.find('&').unwrap_or(hash_part.len());
+    let candidate = hash_part[..end].trim();
+
+    if candidate.len() == 40 && candidate.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Some(candidate.to_lowercase());
+    }
+
+    if candidate.len() == 32 {
+        return decode_base32_btih(candidate);
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_hex_btih_case_insensitively() {
+        let magnet = "magnet:?xt=URN:BTIH:BA0B39DE2C19CEADCFB1B441D8B6D668E57458EF&dn=Avatar";
+        assert_eq!(
+            extract_btih_hex(magnet).as_deref(),
+            Some("ba0b39de2c19ceadcfb1b441d8b6d668e57458ef")
+        );
+    }
+
+    #[test]
+    fn extracts_and_decodes_base32_btih() {
+        let magnet = "magnet:?xt=urn:btih:CWWVGHCJO23WHPWLZ7ZHDLR7KD4NXPQV&dn=Test";
+        let hex = extract_btih_hex(magnet).unwrap();
+        assert_eq!(hex.len(), 40);
+        assert_eq!(hex, "15ad531c4976b763becbcff271ae3f50f8dbbe15");
+    }
+
+    #[test]
+    fn rejects_invalid_btih() {
+        assert_eq!(extract_btih_hex("https://example.com/file.torrent"), None);
+        assert_eq!(extract_btih_hex("magnet:?xt=urn:btih:tooshort"), None);
+        assert_eq!(
+            extract_btih_hex("magnet:?xt=urn:btih:11111111111111111111111111111111"),
+            None
+        );
+    }
 }

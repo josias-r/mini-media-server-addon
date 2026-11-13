@@ -122,7 +122,7 @@ pub async fn build_stream_response(
                             api_key,
                             urlencoding::encode(stremio_id),
                             torrent.hash,
-                            idx,
+                            file.index.unwrap_or(idx),
                             urlencoding::encode(&file.name)
                         )),
                         description: None,
