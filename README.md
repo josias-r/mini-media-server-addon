@@ -17,3 +17,21 @@ The quickest, most seamless way to deploy your own self-hosted media server. Thi
 Ready to self-host your own debrid-like media server?
 
 👉 [**Check out the Self Hosting Guide here**](SELF_HOSTING.md)
+
+## Local Development
+
+```bash
+# 1. Backend (http://localhost:3000)
+cp .env.example .env
+cargo run
+
+# 2. Frontend (http://localhost:5173, proxies /api -> :3000)
+cd app && corepack enable pnpm && pnpm install && pnpm dev
+```
+
+For checks and Playwright E2E tests (starts its own test server):
+
+```bash
+cd app && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test:e2e
+cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings
+```
