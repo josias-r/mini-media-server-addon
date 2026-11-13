@@ -598,10 +598,10 @@ fn sha1_hex(data: &[u8]) -> String {
     }
     padded.extend_from_slice(&bit_len.to_be_bytes());
 
-    for block in padded.chunks_exact(64) {
+    for block in padded.as_chunks::<64>().0 {
         let mut w = [0u32; 80];
-        for (slot, chunk) in w[..16].iter_mut().zip(block.chunks_exact(4)) {
-            *slot = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        for (slot, &chunk) in w[..16].iter_mut().zip(block.as_chunks::<4>().0) {
+            *slot = u32::from_be_bytes(chunk);
         }
         for i in 16..80 {
             w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
