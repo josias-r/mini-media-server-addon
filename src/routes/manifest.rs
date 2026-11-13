@@ -1,6 +1,10 @@
-use axum::{extract::{Path, State}, http::StatusCode, response::{IntoResponse, Json, Response}};
-use serde_json::json;
 use crate::routes::AppState;
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    response::{IntoResponse, Json, Response},
+};
+use serde_json::json;
 
 pub async fn manifest(
     State(state): State<AppState>,

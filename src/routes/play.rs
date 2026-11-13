@@ -1,6 +1,9 @@
-use axum::{extract::{Path, Query, State}, response::{IntoResponse, Response, Redirect}};
-use std::collections::HashMap;
 use super::AppState;
+use axum::{
+    extract::{Path, Query, State},
+    response::{IntoResponse, Redirect, Response},
+};
+use std::collections::HashMap;
 
 pub async fn play_file(
     State(state): State<AppState>,
@@ -11,16 +14,24 @@ pub async fn play_file(
         return (axum::http::StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
 
-    let _ = state.db.update_watch_history(&api_key, &info_hash, "torrent");
+    let _ = state
+        .db
+        .update_watch_history(&api_key, &info_hash, "torrent");
 
-    if let Some(idx_str) = params.get("fileIdx") {
-        if let Ok(idx) = idx_str.parse::<usize>() {
-            state.qbit.set_file_priorities(&info_hash, &[idx], 1).await;
-            state.qbit.resume_torrent(&info_hash).await;
-        }
+    if let Some(idx_str) = params.get("fileIdx")
+        && let Ok(idx) = idx_str.parse::<usize>()
+    {
+        state.qbit.set_file_priorities(&info_hash, &[idx], 1).await;
+        state.qbit.resume_torrent(&info_hash).await;
     }
-    
+
     let file_path = params.get("filePath").unwrap_or(&String::new()).clone();
-    let redirect_url = format!("{}/{}/stream-file/{}?filePath={}", state.config.public_url, api_key, info_hash, urlencoding::encode(&file_path));
+    let redirect_url = format!(
+        "{}/{}/stream-file/{}?filePath={}",
+        state.config.public_url,
+        api_key,
+        info_hash,
+        urlencoding::encode(&file_path)
+    );
     Redirect::temporary(&redirect_url).into_response()
 }

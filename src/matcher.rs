@@ -9,7 +9,7 @@ pub fn find_best_file_match(
     episode: u32,
 ) -> Option<usize> {
     let video_extensions = [".mp4", ".mkv", ".avi", ".webm", ".mov"];
-    
+
     // 1. Filter out non-videos and wrong episodes
     let mut valid_files = Vec::new();
     for (idx, &(name, size)) in files.iter().enumerate() {
@@ -21,7 +21,7 @@ pub fn find_best_file_match(
                 break;
             }
         }
-        
+
         if is_video {
             if is_series && is_definitely_wrong_episode(name, season, episode) {
                 continue;
@@ -29,7 +29,7 @@ pub fn find_best_file_match(
             valid_files.push((idx, name, size));
         }
     }
-    
+
     // Fallback: If no files passed the episode filter, just take all videos
     if valid_files.is_empty() {
         for (idx, &(name, size)) in files.iter().enumerate() {
@@ -68,9 +68,9 @@ pub fn find_best_file_match(
             .split(|c: char| !c.is_alphanumeric())
             .filter(|s| !s.is_empty())
             .collect();
-            
+
         let mut total_distance = 0;
-        
+
         for &expected_token in &expected_tokens {
             // Find the minimum Levenshtein distance from this expected token to any filename token
             let mut min_token_dist = usize::MAX;
@@ -86,9 +86,9 @@ pub fn find_best_file_match(
             }
             total_distance += min_token_dist;
         }
-        
+
         let current_score = (total_distance, size);
-        
+
         match best_score {
             None => {
                 best_score = Some(current_score);

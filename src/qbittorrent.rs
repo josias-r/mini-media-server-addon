@@ -1,9 +1,9 @@
 use crate::config::Config;
 use log::{debug, error};
 use reqwest::{Client, multipart};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use std::time::{Instant, Duration};
 
 pub struct QbitClient {
     client: Client,
@@ -11,7 +11,7 @@ pub struct QbitClient {
     session_cookie: RwLock<Option<(String, Instant)>>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct QbitTorrent {
     pub hash: String,
     pub tags: String,
@@ -25,6 +25,12 @@ pub struct QbitTorrent {
     pub state: String,
     #[serde(default)]
     pub added_on: u64,
+    #[serde(default)]
+    pub dlspeed: u64,
+    #[serde(default)]
+    pub upspeed: u64,
+    #[serde(default)]
+    pub eta: i64,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -47,11 +53,11 @@ impl QbitClient {
     async fn get_session_cookie(&self) -> Option<String> {
         {
             let cache = self.session_cookie.read().await;
-            if let Some((cookie, expiry)) = &*cache {
-                if Instant::now() < *expiry {
-                    debug!("Using cached qBittorrent session cookie");
-                    return Some(cookie.clone());
-                }
+            if let Some((cookie, expiry)) = &*cache
+                && Instant::now() < *expiry
+            {
+                debug!("Using cached qBittorrent session cookie");
+                return Some(cookie.clone());
             }
         }
 
@@ -62,7 +68,9 @@ impl QbitClient {
 
         debug!("Logging in to qBittorrent...");
         let url = format!("{}/api/v2/auth/login", self.config.qbittorrent_url);
-        let res = self.client.post(&url)
+        let res = self
+            .client
+            .post(&url)
             .header("Origin", &self.config.qbittorrent_url)
             .header("Referer", format!("{}/", self.config.qbittorrent_url))
             .form(&params)
@@ -75,7 +83,7 @@ impl QbitClient {
                 if let Some(cookie) = r.headers().get("set-cookie") {
                     let cookie_str = cookie.to_str().unwrap_or("").to_string();
                     let sid = cookie_str.split(';').next().unwrap_or("").to_string();
-                    
+
                     let mut duration_secs = 3600;
                     for part in cookie_str.split(';') {
                         let part = part.trim();
@@ -89,21 +97,33 @@ impl QbitClient {
                             let clean_date = date_str.replace("-", " ");
                             if let Ok(parsed) = chrono::DateTime::parse_from_rfc2822(&clean_date) {
                                 let now = chrono::Utc::now();
-                                let diff = parsed.with_timezone(&chrono::Utc).signed_duration_since(now).num_seconds();
+                                let diff = parsed
+                                    .with_timezone(&chrono::Utc)
+                                    .signed_duration_since(now)
+                                    .num_seconds();
                                 if diff > 0 {
                                     duration_secs = diff as u64;
                                 }
                             }
                         }
                     }
-                    
-                    debug!("Caching new qBittorrent session cookie for {} seconds", duration_secs);
+
+                    debug!(
+                        "Caching new qBittorrent session cookie for {} seconds",
+                        duration_secs
+                    );
 
                     let mut cache = self.session_cookie.write().await;
-                    *cache = Some((sid.clone(), Instant::now() + Duration::from_secs(duration_secs)));
+                    *cache = Some((
+                        sid.clone(),
+                        Instant::now() + Duration::from_secs(duration_secs),
+                    ));
                     Some(sid)
                 } else {
-                    error!("No cookie returned from qBittorrent login, status: {}", status);
+                    error!(
+                        "No cookie returned from qBittorrent login, status: {}",
+                        status
+                    );
                     None
                 }
             }
@@ -128,7 +148,9 @@ impl QbitClient {
             .text("firstLastPiecePrio", "true");
 
         let url = format!("{}/api/v2/torrents/add", self.config.qbittorrent_url);
-        match self.client.post(&url)
+        match self
+            .client
+            .post(&url)
             .header("Cookie", sid)
             .multipart(form)
             .send()
@@ -156,15 +178,17 @@ impl QbitClient {
         };
 
         debug!("Fetching torrents by tag: {}", tag);
-        let url = format!("{}/api/v2/torrents/info?filter=all", self.config.qbittorrent_url);
-        match self.client.get(&url)
-            .header("Cookie", sid)
-            .send()
-            .await
-        {
+        let url = format!(
+            "{}/api/v2/torrents/info?filter=all",
+            self.config.qbittorrent_url
+        );
+        match self.client.get(&url).header("Cookie", sid).send().await {
             Ok(res) if res.status().is_success() => {
                 if let Ok(torrents) = res.json::<Vec<QbitTorrent>>().await {
-                    torrents.into_iter().filter(|t| t.tags.contains(tag)).collect()
+                    torrents
+                        .into_iter()
+                        .filter(|t| t.tags.contains(tag))
+                        .collect()
                 } else {
                     error!("Failed to parse qBittorrent torrents JSON");
                     vec![]
@@ -188,12 +212,11 @@ impl QbitClient {
         };
 
         debug!("Fetching all torrents");
-        let url = format!("{}/api/v2/torrents/info?filter=all", self.config.qbittorrent_url);
-        match self.client.get(&url)
-            .header("Cookie", sid)
-            .send()
-            .await
-        {
+        let url = format!(
+            "{}/api/v2/torrents/info?filter=all",
+            self.config.qbittorrent_url
+        );
+        match self.client.get(&url).header("Cookie", sid).send().await {
             Ok(res) if res.status().is_success() => {
                 if let Ok(torrents) = res.json::<Vec<QbitTorrent>>().await {
                     torrents
@@ -226,7 +249,9 @@ impl QbitClient {
         ];
 
         let url = format!("{}/api/v2/torrents/delete", self.config.qbittorrent_url);
-        match self.client.post(&url)
+        match self
+            .client
+            .post(&url)
             .header("Cookie", sid)
             .form(&params)
             .send()
@@ -237,7 +262,11 @@ impl QbitClient {
                 true
             }
             Ok(res) => {
-                error!("Failed to delete torrent {}, status: {}", hash, res.status());
+                error!(
+                    "Failed to delete torrent {}, status: {}",
+                    hash,
+                    res.status()
+                );
                 false
             }
             Err(e) => {
@@ -254,12 +283,11 @@ impl QbitClient {
         };
 
         debug!("Fetching files for torrent: {}", info_hash);
-        let url = format!("{}/api/v2/torrents/files?hash={}", self.config.qbittorrent_url, info_hash);
-        match self.client.get(&url)
-            .header("Cookie", sid)
-            .send()
-            .await
-        {
+        let url = format!(
+            "{}/api/v2/torrents/files?hash={}",
+            self.config.qbittorrent_url, info_hash
+        );
+        match self.client.get(&url).header("Cookie", sid).send().await {
             Ok(res) if res.status().is_success() => {
                 if let Ok(files) = res.json::<Vec<QbitFile>>().await {
                     files
@@ -283,22 +311,31 @@ impl QbitClient {
         if file_ids.is_empty() {
             return true;
         }
-        
+
         let sid = match self.get_session_cookie().await {
             Some(s) => s,
             None => return false,
         };
 
-        let id_str = file_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join("|");
-        debug!("Setting priority {} for files {} in torrent {}", priority, id_str, hash);
-        
+        let id_str = file_ids
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join("|");
+        debug!(
+            "Setting priority {} for files {} in torrent {}",
+            priority, id_str, hash
+        );
+
         let form = multipart::Form::new()
             .text("hash", hash.to_string())
             .text("id", id_str)
             .text("priority", priority.to_string());
 
         let url = format!("{}/api/v2/torrents/filePrio", self.config.qbittorrent_url);
-        match self.client.post(&url)
+        match self
+            .client
+            .post(&url)
             .header("Cookie", sid)
             .multipart(form)
             .send()
@@ -325,7 +362,9 @@ impl QbitClient {
         debug!("Resuming torrent {}", hash);
         let params = [("hashes", hash)];
         let url = format!("{}/api/v2/torrents/start", self.config.qbittorrent_url);
-        match self.client.post(&url)
+        match self
+            .client
+            .post(&url)
             .header("Cookie", sid)
             .form(&params)
             .send()
@@ -341,5 +380,9 @@ impl QbitClient {
                 false
             }
         }
+    }
+
+    pub async fn check_health(&self) -> bool {
+        self.get_session_cookie().await.is_some()
     }
 }

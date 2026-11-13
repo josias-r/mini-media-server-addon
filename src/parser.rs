@@ -1,6 +1,10 @@
 use regex::Regex;
 
-pub fn is_definitely_wrong_episode(title: &str, expected_season: u32, expected_episode: u32) -> bool {
+pub fn is_definitely_wrong_episode(
+    title: &str,
+    expected_season: u32,
+    expected_episode: u32,
+) -> bool {
     let str = title.to_uppercase();
 
     // Pattern 1: S01E05 or S01E05-E06 or S01E05-06
@@ -40,7 +44,8 @@ pub fn is_definitely_wrong_episode(title: &str, expected_season: u32, expected_e
     }
 
     // Pattern 3: Absolute episode numbers like E05 or EP05 or Episode 5
-    let ep_match = Regex::new(r"(?:^|[^A-Z])(?:E|EP|EPISODE)[.\s-]*(\d+)(?:(?:-E?|-)(\d+))?(?:\b|$)").unwrap();
+    let ep_match =
+        Regex::new(r"(?:^|[^A-Z])(?:E|EP|EPISODE)[.\s-]*(\d+)(?:(?:-E?|-)(\d+))?(?:\b|$)").unwrap();
     if let Some(caps) = ep_match.captures(&str) {
         let e_start: u32 = caps.get(1).unwrap().as_str().parse().unwrap();
         let e_end: u32 = caps.get(2).map_or(e_start, |m| m.as_str().parse().unwrap());
@@ -85,7 +90,8 @@ pub fn is_definitely_not_full_season(title: &str, expected_season: u32) -> bool 
         }
     }
 
-    let ep_match = Regex::new(r"(?:^|[^A-Z])(?:E|EP|EPISODE)[.\s-]*(\d+)(?:(?:-E?|-)(\d+))?(?:\b|$)").unwrap();
+    let ep_match =
+        Regex::new(r"(?:^|[^A-Z])(?:E|EP|EPISODE)[.\s-]*(\d+)(?:(?:-E?|-)(\d+))?(?:\b|$)").unwrap();
     if let Some(caps) = ep_match.captures(&str) {
         let e_start: u32 = caps.get(1).unwrap().as_str().parse().unwrap();
         let e_end: u32 = caps.get(2).map_or(e_start, |m| m.as_str().parse().unwrap());
@@ -94,7 +100,8 @@ pub fn is_definitely_not_full_season(title: &str, expected_season: u32) -> bool 
         }
     }
 
-    let season_match = Regex::new(r"(?:^|[^A-Z])(?:S|SEASON)[.\s-]*(\d+)(?:(?:-S?|-)(\d+))?(?:\b|$)").unwrap();
+    let season_match =
+        Regex::new(r"(?:^|[^A-Z])(?:S|SEASON)[.\s-]*(\d+)(?:(?:-S?|-)(\d+))?(?:\b|$)").unwrap();
     if let Some(caps) = season_match.captures(&str) {
         let s_start: u32 = caps.get(1).unwrap().as_str().parse().unwrap();
         let s_end: u32 = caps.get(2).map_or(s_start, |m| m.as_str().parse().unwrap());

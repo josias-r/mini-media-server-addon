@@ -16,12 +16,30 @@ pub struct JackettResult {
 }
 
 pub enum TorznabParams {
-    MovieImdb { imdb_id: String },
-    MovieText { query: String },
-    SeriesImdb { imdb_id: String, season: u32, episode: u32 },
-    SeriesText { query: String, season: u32, episode: u32 },
-    SeriesSeasonImdb { imdb_id: String, season: u32 },
-    SeriesSeasonText { query: String, season: u32 },
+    MovieImdb {
+        imdb_id: String,
+    },
+    MovieText {
+        query: String,
+    },
+    SeriesImdb {
+        imdb_id: String,
+        season: u32,
+        episode: u32,
+    },
+    SeriesText {
+        query: String,
+        season: u32,
+        episode: u32,
+    },
+    SeriesSeasonImdb {
+        imdb_id: String,
+        season: u32,
+    },
+    SeriesSeasonText {
+        query: String,
+        season: u32,
+    },
 }
 
 fn build_query_string(config: &Config, params: &TorznabParams) -> String {
@@ -33,10 +51,21 @@ fn build_query_string(config: &Config, params: &TorznabParams) -> String {
         TorznabParams::MovieText { query } => {
             qs.push_str(&format!("&t=movie&q={}", urlencoding::encode(query)));
         }
-        TorznabParams::SeriesImdb { imdb_id, season, episode } => {
-            qs.push_str(&format!("&t=tvsearch&imdbid={}&season={}&ep={}", imdb_id, season, episode));
+        TorznabParams::SeriesImdb {
+            imdb_id,
+            season,
+            episode,
+        } => {
+            qs.push_str(&format!(
+                "&t=tvsearch&imdbid={}&season={}&ep={}",
+                imdb_id, season, episode
+            ));
         }
-        TorznabParams::SeriesText { query, season, episode } => {
+        TorznabParams::SeriesText {
+            query,
+            season,
+            episode,
+        } => {
             let q = format!("{} S{:02}E{:02}", query, season, episode);
             qs.push_str(&format!("&t=search&q={}", urlencoding::encode(&q)));
         }
@@ -102,7 +131,10 @@ pub async fn fetch_jackett_results(
     params: &TorznabParams,
 ) -> Vec<JackettResult> {
     let qs = build_query_string(config, params);
-    let url = format!("{}/api/v2.0/indexers/all/results/torznab/api?{}", config.jackett_url, qs);
+    let url = format!(
+        "{}/api/v2.0/indexers/all/results/torznab/api?{}",
+        config.jackett_url, qs
+    );
 
     debug!("Fetching from Jackett: {}", url);
     let response = match client.get(&url).send().await {
@@ -167,16 +199,14 @@ pub async fn fetch_jackett_results(
             }
 
             // Fallback: Try to extract info_hash from magnet_uri if missing
-            if info_hash.is_none() {
-                if let Some(ref magnet) = magnet_uri {
-                    if magnet.starts_with("magnet:") {
-                        if let Some(start) = magnet.find("urn:btih:") {
-                            let hash_part = &magnet[start + 9..];
-                            let end = hash_part.find('&').unwrap_or(hash_part.len());
-                            info_hash = Some(hash_part[..end].to_string());
-                        }
-                    }
-                }
+            if info_hash.is_none()
+                && let Some(ref magnet) = magnet_uri
+                && magnet.starts_with("magnet:")
+                && let Some(start) = magnet.find("urn:btih:")
+            {
+                let hash_part = &magnet[start + 9..];
+                let end = hash_part.find('&').unwrap_or(hash_part.len());
+                info_hash = Some(hash_part[..end].to_string());
             }
 
             // let mut tracker_id = String::new();
@@ -200,11 +230,14 @@ pub async fn fetch_jackett_results(
                 });
             }
         }
-        debug!("Jackett XML parsed successfully. Found {} items.", results.len());
+        debug!(
+            "Jackett XML parsed successfully. Found {} items.",
+            results.len()
+        );
     } else {
         debug!("Jackett XML did not contain a <channel>. Raw XML: {}", xml);
     }
 
-    results.sort_by(|a, b| b.seeders.cmp(&a.seeders));
+    results.sort_by_key(|b| std::cmp::Reverse(b.seeders));
     results
 }

@@ -1,12 +1,10 @@
 pub mod admin;
 pub mod manifest;
 pub mod movie;
-pub mod series;
-pub mod trigger;
 pub mod play;
+pub mod series;
 pub mod stream;
-pub mod home;
-pub mod ui;
+pub mod trigger;
 
 use crate::config::Config;
 use crate::qbittorrent::QbitClient;
@@ -15,6 +13,7 @@ use axum::routing::get;
 use reqwest::Client;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
+use tower_http::services::{ServeDir, ServeFile};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -26,15 +25,28 @@ pub struct AppState {
 }
 
 pub fn create_router(state: AppState) -> Router {
+    let static_dir = std::env::var("STATIC_DIR").unwrap_or_else(|_| "app/dist".to_string());
+    let spa_service = ServeDir::new(&static_dir)
+        .not_found_service(ServeFile::new(format!("{}/index.html", static_dir)));
+
     Router::new()
-        .route("/", get(home::home))
         .route("/{api_key}/manifest.json", get(manifest::manifest))
         .route("/{api_key}/stream/movie/{id}", get(movie::movie_stream))
         .route("/{api_key}/stream/series/{id}", get(series::series_stream))
-        .route("/{api_key}/trigger-download/{stremio_id}/{info_hash}", get(trigger::trigger_download))
-        .route("/{api_key}/play-file/{stremio_id}/{info_hash}", get(play::play_file))
-        .route("/{api_key}/stream-file/{info_hash}", get(stream::stream_file))
-        .nest("/admin", admin::admin_routes())
+        .route(
+            "/{api_key}/trigger-download/{stremio_id}/{info_hash}",
+            get(trigger::trigger_download),
+        )
+        .route(
+            "/{api_key}/play-file/{stremio_id}/{info_hash}",
+            get(play::play_file),
+        )
+        .route(
+            "/{api_key}/stream-file/{info_hash}",
+            get(stream::stream_file),
+        )
+        .nest("/api", admin::api_routes())
+        .fallback_service(spa_service)
         .layer(CorsLayer::permissive())
         .with_state(state)
 }

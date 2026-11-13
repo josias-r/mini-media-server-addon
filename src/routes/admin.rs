@@ -1,305 +1,449 @@
 use axum::{
-    extract::State,
-    http::{header, StatusCode},
+    Json, Router,
+    extract::{Path, Query, State},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{get, post},
-    Router,
+    routing::{delete, get, post},
 };
-use axum::http::HeaderMap;
-use serde::Deserialize;
-use maud::html;
+use chrono::{DateTime, Duration, NaiveDateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::time::Duration as StdDuration;
 
+use crate::db::UserRecord;
 use crate::routes::AppState;
-use crate::routes::ui::base_layout;
 
-pub fn admin_routes() -> Router<AppState> {
+pub fn api_routes() -> Router<AppState> {
     Router::new()
-        .route("/login", get(login_page).post(login_submit))
-        .route("/logout", get(logout))
-        .route("/", get(admin_dashboard))
-        .route("/users", post(create_user))
-        .route("/users/delete", post(delete_user))
-        .route("/torrents/delete", post(delete_torrent_handler))
+        .route("/info", get(public_info))
+        .route("/verify", get(verify_key))
+        .route("/admin/session", get(admin_session))
+        .route("/admin/login", post(login_submit))
+        .route("/admin/logout", post(logout))
+        .route("/admin/password", post(change_password))
+        .route("/admin/overview", get(admin_overview))
+        .route("/admin/users", post(create_user))
+        .route("/admin/users/{api_key}", delete(delete_user))
+        .route("/admin/torrents/{hash}", delete(delete_torrent_handler))
 }
 
-fn check_auth(headers: &HeaderMap, state: &AppState) -> Result<(), Response> {
+fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
+    (status, Json(serde_json::json!({ "error": message.into() }))).into_response()
+}
+
+fn check_auth(headers: &HeaderMap, state: &AppState) -> bool {
     if let Some(cookie_str) = headers.get(header::COOKIE).and_then(|h| h.to_str().ok()) {
         let expected_cookie = format!("admin_session={}", state.admin_session_token);
         for cookie in cookie_str.split(';') {
             if cookie.trim() == expected_cookie {
-                return Ok(());
+                return true;
             }
         }
     }
-    
-    Err(axum::response::Redirect::to("/admin/login").into_response())
+
+    false
 }
 
-async fn admin_dashboard(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<impl IntoResponse, Response> {
-    check_auth(&headers, &state)?;
+#[derive(Serialize)]
+struct PublicInfoResponse {
+    public_url: String,
+    retention_days: u64,
+    jackett_search_type: String,
+    version: &'static str,
+}
 
-    let watch_times = state.db.get_torrent_watch_times().unwrap_or_default();
-    let mut torrents = state.qbit.get_all_torrents().await;
-    torrents.sort_by(|a, b| a.added_on.cmp(&b.added_on));
-    let users = state.db.get_users().unwrap_or_default();
-
-    let content = html! {
-        div class="section" style="margin-top: 1rem;" {
-            h2 { "Users Management" }
-            div class="card" style="margin-bottom: 2rem;" {
-                h3 style="margin-top: 0; margin-bottom: 1rem;" { "Create User" }
-                form method="POST" action="/admin/users" style="display: flex; flex-wrap: wrap; gap: 1rem; align-items: stretch;" {
-                    input type="text" name="username" placeholder="Username" required class="input-field" style="margin-bottom: 0; flex: 1 1 150px; min-width: 0;" {}
-                    button type="submit" class="btn" style="flex: 1 1 150px; white-space: normal; height: auto; text-align: center; min-width: 0;" { "Create New User (API Key)" }
-                }
-            }
-
-            h3 { "Active Users" }
-            div class="card" style="padding: 0; overflow-x: auto;" {
-                table style="margin-bottom: 0;" {
-                    tr {
-                        th { "Username" }
-                        th { "API Key" }
-                        th { "Created At" }
-                        th { "Action" }
-                    }
-                    @for (username, api_key, created_at) in &users {
-                        tr {
-                            td { (username) }
-                            td style="white-space: nowrap;" { code { (api_key) } }
-                            td style="white-space: nowrap;" { (created_at) }
-                            td {
-                                form method="POST" action="/admin/users/delete" style="margin: 0;" {
-                                    input type="hidden" name="api_key" value=(api_key) {}
-                                    button type="submit" class="btn btn-danger" style="padding: 0.4rem 0.8rem; font-size: 0.9rem;" { "Delete" }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-         div class="section" {
-            h2 { "Current Torrents & Watch History" }
-            div style="display: flex; flex-direction: column; gap: 1rem;" {
-                @for t in &torrents {
-                    @let last_watched = watch_times.get(&t.hash.to_lowercase()).map(|s| s.as_str()).unwrap_or("Never");
-                    @let size_gb = t.size as f64 / 1024.0 / 1024.0 / 1024.0;
-                    @let progress_pct = (t.progress * 100.0).round();
-                    div class="card" style="padding: 1.5rem; margin-bottom: 0;" {
-                        div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap;" {
-                            div style="flex-grow: 1; min-width: 0; flex-basis: 250px;" {
-                                h4 title=(t.name) style="color: var(--primary); margin: 0 0 0.5rem 0; font-size: 1.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" { (t.name) }
-                                div style="display: flex; gap: 1.5rem; flex-wrap: wrap; color: var(--text-muted); font-size: 0.9rem;" {
-                                    span { strong style="color: var(--text);" { "Size: " } (format!("{:.2} GB", size_gb)) }
-                                    span { strong style="color: var(--text);" { "Progress: " } (progress_pct) "%" }
-                                    span { strong style="color: var(--text);" { "State: " } (t.state) }
-                                    @if last_watched == "Never" {
-                                        span { strong style="color: var(--text);" { "Last Watched: " } "Never" }
-                                    } @else {
-                                        @let last_watched_iso = format!("{}Z", last_watched.replace(" ", "T"));
-                                        span { strong style="color: var(--text);" { "Last Watched: " } span class="relative-time" data-time=(last_watched_iso) { (last_watched) } }
-                                    }
-                                    span title=(t.hash) style="max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" { strong style="color: var(--text);" { "Hash: " } code { (t.hash) } }
-                                }
-                            }
-                            form method="POST" action="/admin/torrents/delete" style="margin: 0; flex-shrink: 0;" {
-                                input type="hidden" name="hash" value=(t.hash) {}
-                                button type="submit" class="btn btn-danger" style="padding: 0.5rem 1rem; font-size: 0.9rem;" { "Delete" }
-                            }
-                        }
-                    }
-                }
-                @if torrents.is_empty() {
-                    div class="card" style="text-align: center; color: var(--text-muted);" {
-                        "No active torrents found."
-                    }
-                }
-            }
-        }
-        
-        div style="display: flex; flex-direction: column; align-items: center; gap: 1rem; margin-top: 3rem; margin-bottom: 2rem;" {
-            a href="/admin/logout" class="btn btn-danger" style="padding: 0.5rem 2rem;" { "Logout" }
-            a href="/" style="color: var(--text-muted); text-decoration: none; font-size: 0.9rem;" { "← Back to Home" }
-        }
-        
-        script {
-            (maud::PreEscaped(r#"
-            document.addEventListener("DOMContentLoaded", () => {
-                const timeElements = document.querySelectorAll(".relative-time");
-                const rtf = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
-                
-                timeElements.forEach(el => {
-                    const date = new Date(el.getAttribute("data-time"));
-                    if (!isNaN(date)) {
-                        const now = new Date();
-                        const diffMs = date - now;
-                        const diffSecs = Math.round(diffMs / 1000);
-                        const diffMins = Math.round(diffSecs / 60);
-                        const diffHours = Math.round(diffMins / 60);
-                        const diffDays = Math.round(diffHours / 24);
-                        
-                        if (Math.abs(diffSecs) < 60) {
-                            el.textContent = "just now";
-                        } else if (Math.abs(diffMins) < 60) {
-                            el.textContent = rtf.format(diffMins, "minute");
-                        } else if (Math.abs(diffHours) < 24) {
-                            el.textContent = rtf.format(diffHours, "hour");
-                        } else {
-                            el.textContent = rtf.format(diffDays, "day");
-                        }
-                    }
-                });
-            });
-            "#))
-        }
-    };
-
-    Ok(base_layout("Admin Panel", "Manage users and server activity", content))
+async fn public_info(State(state): State<AppState>) -> impl IntoResponse {
+    Json(PublicInfoResponse {
+        public_url: state.config.public_url.clone(),
+        retention_days: state.config.retention_days,
+        jackett_search_type: state.config.jackett_search_type.clone(),
+        version: env!("CARGO_PKG_VERSION"),
+    })
 }
 
 #[derive(Deserialize)]
-struct CreateUserForm {
+struct VerifyQuery {
+    api_key: Option<String>,
+}
+
+#[derive(Serialize)]
+struct UserTorrentStatus {
+    hash: String,
+    name: String,
+    size: u64,
+    progress: f64,
+    state: String,
+    dlspeed: u64,
+    last_watched_at: String,
+}
+
+#[derive(Serialize)]
+struct VerifyKeyResponse {
+    valid: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    created_at: Option<String>,
+    active_torrents: Vec<UserTorrentStatus>,
+}
+
+async fn verify_key(
+    State(state): State<AppState>,
+    Query(query): Query<VerifyQuery>,
+) -> impl IntoResponse {
+    let key = query.api_key.unwrap_or_default().trim().to_string();
+    if key.is_empty() {
+        return Json(VerifyKeyResponse {
+            valid: false,
+            username: None,
+            created_at: None,
+            active_torrents: vec![],
+        });
+    }
+
+    match state.db.get_user_by_key(&key) {
+        Ok(Some((username, _, created_at))) => {
+            let watch_history = state.db.get_user_watch_history(&key).unwrap_or_default();
+            let active_torrents = if watch_history.is_empty() {
+                vec![]
+            } else {
+                let torrents = state.qbit.get_all_torrents().await;
+                let torrent_map: HashMap<String, _> = torrents
+                    .into_iter()
+                    .map(|t| (t.hash.to_lowercase(), t))
+                    .collect();
+
+                watch_history
+                    .into_iter()
+                    .filter_map(|(hash, last_watched_at)| {
+                        torrent_map.get(&hash).map(|t| UserTorrentStatus {
+                            hash: t.hash.clone(),
+                            name: t.name.clone(),
+                            size: t.size,
+                            progress: t.progress,
+                            state: t.state.clone(),
+                            dlspeed: t.dlspeed,
+                            last_watched_at,
+                        })
+                    })
+                    .collect()
+            };
+
+            Json(VerifyKeyResponse {
+                valid: true,
+                username: Some(username),
+                created_at: Some(created_at),
+                active_torrents,
+            })
+        }
+        _ => Json(VerifyKeyResponse {
+            valid: false,
+            username: None,
+            created_at: None,
+            active_torrents: vec![],
+        }),
+    }
+}
+
+async fn admin_session(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !check_auth(&headers, &state) {
+        return json_error(StatusCode::UNAUTHORIZED, "Unauthorized");
+    }
+    Json(serde_json::json!({ "authenticated": true })).into_response()
+}
+
+#[derive(Deserialize)]
+struct LoginRequest {
+    password: String,
+}
+
+async fn login_submit(
+    State(state): State<AppState>,
+    Json(payload): Json<LoginRequest>,
+) -> Response {
+    let expected_password = state.db.get_admin_password().unwrap_or_default();
+
+    if payload.password == expected_password {
+        let cookie_value = format!(
+            "admin_session={}; Path=/; HttpOnly; SameSite=Lax",
+            state.admin_session_token
+        );
+        (
+            StatusCode::OK,
+            [(header::SET_COOKIE, cookie_value)],
+            Json(serde_json::json!({ "ok": true })),
+        )
+            .into_response()
+    } else {
+        json_error(StatusCode::UNAUTHORIZED, "Invalid password")
+    }
+}
+
+async fn logout() -> Response {
+    let cookie_value = "admin_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
+    (
+        StatusCode::OK,
+        [(header::SET_COOKIE, cookie_value.to_string())],
+        Json(serde_json::json!({ "ok": true })),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+struct ChangePasswordRequest {
+    password: String,
+}
+
+async fn change_password(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<ChangePasswordRequest>,
+) -> Response {
+    if !check_auth(&headers, &state) {
+        return json_error(StatusCode::UNAUTHORIZED, "Unauthorized");
+    }
+
+    if payload.password.len() < 4 {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "Password must be at least 4 characters",
+        );
+    }
+
+    match state.db.set_admin_password(&payload.password) {
+        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Err(e) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to update password: {}", e),
+        ),
+    }
+}
+
+#[derive(Serialize)]
+struct AdminHealth {
+    qbittorrent: bool,
+    jackett: bool,
+}
+
+#[derive(Serialize)]
+struct AdminConfigInfo {
+    public_url: String,
+    retention_days: u64,
+    jackett_search_type: String,
+}
+
+#[derive(Serialize)]
+struct AdminTorrentInfo {
+    hash: String,
+    name: String,
+    size: u64,
+    progress: f64,
+    state: String,
+    dlspeed: u64,
+    upspeed: u64,
+    eta: i64,
+    added_on: u64,
+    last_watched_at: Option<String>,
+    expires_at: Option<String>,
+}
+
+#[derive(Serialize)]
+struct AdminOverviewResponse {
+    health: AdminHealth,
+    config: AdminConfigInfo,
+    users: Vec<UserRecord>,
+    torrents: Vec<AdminTorrentInfo>,
+}
+
+async fn check_jackett_health(state: &AppState) -> bool {
+    let base = state.config.jackett_url.trim_end_matches('/');
+    let url = format!(
+        "{}/api/v2.0/indexers/all/results/torznab/api?t=caps&apikey={}",
+        base,
+        urlencoding::encode(&state.config.jackett_api_key)
+    );
+
+    match state
+        .http_client
+        .get(&url)
+        .timeout(StdDuration::from_secs(3))
+        .send()
+        .await
+    {
+        Ok(res) => res.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+fn compute_expires_at(
+    retention_days: u64,
+    last_watched_at: Option<&str>,
+    added_on: u64,
+) -> Option<String> {
+    if retention_days == 0 {
+        return None;
+    }
+    let retention_secs = retention_days as i64 * 86_400;
+
+    if let Some(last) = last_watched_at
+        && let Ok(parsed) = NaiveDateTime::parse_from_str(last, "%Y-%m-%d %H:%M:%S")
+    {
+        let dt = DateTime::<Utc>::from_naive_utc_and_offset(parsed, Utc)
+            + Duration::seconds(retention_secs);
+        return Some(dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+    }
+
+    if added_on > 0
+        && let Some(dt) = DateTime::<Utc>::from_timestamp(added_on as i64 + retention_secs, 0)
+    {
+        return Some(dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+    }
+
+    None
+}
+
+async fn admin_overview(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !check_auth(&headers, &state) {
+        return json_error(StatusCode::UNAUTHORIZED, "Unauthorized");
+    }
+
+    let (qbit_ok, jackett_ok, raw_torrents) = tokio::join!(
+        state.qbit.check_health(),
+        check_jackett_health(&state),
+        state.qbit.get_all_torrents()
+    );
+
+    let watch_times = state.db.get_torrent_watch_times().unwrap_or_default();
+    let users = state.db.get_users_with_stats().unwrap_or_default();
+
+    let torrents = raw_torrents
+        .into_iter()
+        .map(|t| {
+            let last_watched_at = watch_times.get(&t.hash.to_lowercase()).cloned();
+            let expires_at = compute_expires_at(
+                state.config.retention_days,
+                last_watched_at.as_deref(),
+                t.added_on,
+            );
+            AdminTorrentInfo {
+                hash: t.hash,
+                name: t.name,
+                size: t.size,
+                progress: t.progress,
+                state: t.state,
+                dlspeed: t.dlspeed,
+                upspeed: t.upspeed,
+                eta: t.eta,
+                added_on: t.added_on,
+                last_watched_at,
+                expires_at,
+            }
+        })
+        .collect();
+
+    Json(AdminOverviewResponse {
+        health: AdminHealth {
+            qbittorrent: qbit_ok,
+            jackett: jackett_ok,
+        },
+        config: AdminConfigInfo {
+            public_url: state.config.public_url.clone(),
+            retention_days: state.config.retention_days,
+            jackett_search_type: state.config.jackett_search_type.clone(),
+        },
+        users,
+        torrents,
+    })
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct CreateUserRequest {
     username: String,
+}
+
+#[derive(Serialize)]
+struct CreateUserResponse {
+    username: String,
+    api_key: String,
+    created_at: String,
 }
 
 async fn create_user(
     State(state): State<AppState>,
     headers: HeaderMap,
-    axum::extract::Form(form): axum::extract::Form<CreateUserForm>,
-) -> Result<impl IntoResponse, Response> {
-    check_auth(&headers, &state)?;
-
-    match state.db.create_user(&form.username) {
-        Ok(api_key) => {
-            let content = html! {
-                div class="section" {
-                    div class="card" style="text-align: center;" {
-                        h2 style="color: #10b981; border: none; margin-bottom: 0;" { "User Created Successfully" }
-                        p style="font-size: 1.2rem; margin: 1rem 0;" {
-                            "Username: " strong { (form.username) }
-                        }
-                        div style="background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 8px; margin: 2rem 0;" {
-                            p style="margin: 0 0 0.5rem 0; color: var(--text-muted);" { "API Key:" }
-                            code style="font-size: 1.5rem; color: #a78bfa;" { (api_key) }
-                        }
-                        a href="/admin" class="btn" { "Back to Admin Panel" }
-                    }
-                }
-            };
-            Ok(base_layout("Success", "", content))
-        }
-        Err(e) => {
-            let content = html! {
-                div class="section" {
-                    div class="card" style="text-align: center;" {
-                        h2 style="color: #ef4444; border: none;" { "Error" }
-                        p { "Failed to create user: " (e) }
-                        a href="/admin" class="btn" { "Back to Admin Panel" }
-                    }
-                }
-            };
-            Ok(base_layout("Error", "", content))
-        }
+    Json(payload): Json<CreateUserRequest>,
+) -> Response {
+    if !check_auth(&headers, &state) {
+        return json_error(StatusCode::UNAUTHORIZED, "Unauthorized");
     }
-}
 
-#[derive(Deserialize)]
-struct DeleteUserForm {
-    api_key: String,
+    let username = payload.username.trim();
+    if username.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "Username cannot be empty");
+    }
+
+    match state.db.create_user(username) {
+        Ok(api_key) => {
+            let created_at = state
+                .db
+                .get_user_by_key(&api_key)
+                .ok()
+                .flatten()
+                .map(|(_, _, ts)| ts)
+                .unwrap_or_else(|| Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+
+            (
+                StatusCode::CREATED,
+                Json(CreateUserResponse {
+                    username: username.to_string(),
+                    api_key,
+                    created_at,
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to create user: {}", e),
+        ),
+    }
 }
 
 async fn delete_user(
     State(state): State<AppState>,
     headers: HeaderMap,
-    axum::extract::Form(form): axum::extract::Form<DeleteUserForm>,
-) -> Result<axum::response::Redirect, Response> {
-    check_auth(&headers, &state)?;
-    let _ = state.db.delete_user(&form.api_key);
-    Ok(axum::response::Redirect::to("/admin"))
-}
+    Path(api_key): Path<String>,
+) -> Response {
+    if !check_auth(&headers, &state) {
+        return json_error(StatusCode::UNAUTHORIZED, "Unauthorized");
+    }
 
-#[derive(Deserialize)]
-struct DeleteTorrentForm {
-    hash: String,
+    match state.db.delete_user(&api_key) {
+        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Err(e) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to delete user: {}", e),
+        ),
+    }
 }
 
 async fn delete_torrent_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
-    axum::extract::Form(form): axum::extract::Form<DeleteTorrentForm>,
-) -> Result<axum::response::Redirect, Response> {
-    check_auth(&headers, &state)?;
-    
-    if state.qbit.delete_torrent(&form.hash, true).await {
-        let _ = state.db.delete_watch_history(&form.hash);
-    }
-    
-    Ok(axum::response::Redirect::to("/admin"))
-}
-
-#[derive(Deserialize)]
-struct LoginForm {
-    password: String,
-}
-
-async fn login_page() -> impl IntoResponse {
-    let content = html! {
-        div class="section" style="max-width: 400px; margin: 0 auto; margin-top: 5rem;" {
-            div class="card" {
-                h2 style="text-align: center; border: none; margin-bottom: 2rem;" { "Admin Login" }
-                form method="POST" action="/admin/login" style="display: flex; flex-direction: column; gap: 1rem;" {
-                    input type="password" name="password" placeholder="Admin Password" required class="input-field" style="margin-bottom: 0;" {}
-                    button type="submit" class="btn" style="width: 100%;" { "Log In" }
-                }
-            }
-        }
-    };
-    base_layout("Admin Login", "Please sign in", content)
-}
-
-async fn login_submit(
-    State(state): State<AppState>,
-    axum::extract::Form(form): axum::extract::Form<LoginForm>,
+    Path(hash): Path<String>,
 ) -> Response {
-    let expected_password = state.db.get_admin_password().unwrap_or_default();
-    
-    if form.password == expected_password {
-        let cookie_value = format!(
-            "admin_session={}; Path=/admin; HttpOnly; SameSite=Lax",
-            state.admin_session_token
-        );
-        (
-            StatusCode::SEE_OTHER,
-            [(header::SET_COOKIE, cookie_value), (header::LOCATION, "/admin".to_string())],
-        ).into_response()
-    } else {
-        let content = html! {
-            div class="section" style="max-width: 400px; margin: 0 auto; margin-top: 5rem;" {
-                div class="card" {
-                    h2 style="text-align: center; border: none; margin-bottom: 2rem;" { "Admin Login" }
-                    div style="color: #ef4444; background: rgba(239, 68, 68, 0.1); padding: 0.5rem; border-radius: 4px; margin-bottom: 1rem; text-align: center;" {
-                        "Invalid password"
-                    }
-                    form method="POST" action="/admin/login" style="display: flex; flex-direction: column; gap: 1rem;" {
-                        input type="password" name="password" placeholder="Admin Password" required class="input-field" style="margin-bottom: 0;" {}
-                        button type="submit" class="btn" style="width: 100%;" { "Log In" }
-                    }
-                }
-            }
-        };
-        base_layout("Admin Login", "Please sign in", content).into_response()
+    if !check_auth(&headers, &state) {
+        return json_error(StatusCode::UNAUTHORIZED, "Unauthorized");
     }
-}
 
-async fn logout() -> Response {
-    let cookie_value = "admin_session=; Path=/admin; HttpOnly; SameSite=Lax; Max-Age=0";
-    (
-        StatusCode::SEE_OTHER,
-        [(header::SET_COOKIE, cookie_value.to_string()), (header::LOCATION, "/admin/login".to_string())],
-    ).into_response()
+    if state.qbit.delete_torrent(&hash, true).await {
+        let _ = state.db.delete_watch_history(&hash);
+        Json(serde_json::json!({ "ok": true })).into_response()
+    } else {
+        json_error(
+            StatusCode::BAD_GATEWAY,
+            "Failed to delete torrent from qBittorrent",
+        )
+    }
 }
