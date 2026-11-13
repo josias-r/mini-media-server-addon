@@ -190,7 +190,7 @@ pub async fn fetch_jackett_results(
                     if name == "seeders" {
                         seeders = value.parse().unwrap_or(0);
                     } else if name == "infohash" {
-                        info_hash = Some(value);
+                        info_hash = Some(value.trim().to_lowercase());
                     }
                 }
             }
@@ -203,7 +203,7 @@ pub async fn fetch_jackett_results(
             {
                 let hash_part = &magnet[start + 9..];
                 let end = hash_part.find('&').unwrap_or(hash_part.len());
-                info_hash = Some(hash_part[..end].to_string());
+                info_hash = Some(hash_part[..end].trim().to_lowercase());
             }
 
             let mut tracker_name = "Unknown".to_string();

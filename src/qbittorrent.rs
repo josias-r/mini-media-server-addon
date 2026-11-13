@@ -237,6 +237,7 @@ impl QbitClient {
     }
 
     pub async fn delete_torrent(&self, hash: &str, delete_files: bool) -> bool {
+        let hash = hash.trim().to_lowercase();
         let sid = match self.get_session_cookie().await {
             Some(s) => s,
             None => return false,
@@ -244,7 +245,7 @@ impl QbitClient {
 
         debug!("Deleting torrent {} (delete_files: {})", hash, delete_files);
         let params = [
-            ("hashes", hash),
+            ("hashes", hash.as_str()),
             ("deleteFiles", if delete_files { "true" } else { "false" }),
         ];
 
@@ -277,6 +278,7 @@ impl QbitClient {
     }
 
     pub async fn get_torrent_files(&self, info_hash: &str) -> Vec<QbitFile> {
+        let info_hash = info_hash.trim().to_lowercase();
         let sid = match self.get_session_cookie().await {
             Some(s) => s,
             None => return vec![],
@@ -312,6 +314,7 @@ impl QbitClient {
             return true;
         }
 
+        let hash = hash.trim().to_lowercase();
         let sid = match self.get_session_cookie().await {
             Some(s) => s,
             None => return false,
@@ -328,7 +331,7 @@ impl QbitClient {
         );
 
         let form = multipart::Form::new()
-            .text("hash", hash.to_string())
+            .text("hash", hash)
             .text("id", id_str)
             .text("priority", priority.to_string());
 
@@ -354,13 +357,14 @@ impl QbitClient {
     }
 
     pub async fn resume_torrent(&self, hash: &str) -> bool {
+        let hash = hash.trim().to_lowercase();
         let sid = match self.get_session_cookie().await {
             Some(s) => s,
             None => return false,
         };
 
         debug!("Resuming torrent {}", hash);
-        let params = [("hashes", hash)];
+        let params = [("hashes", hash.as_str())];
         let url = format!("{}/api/v2/torrents/start", self.config.qbittorrent_url);
         match self
             .client

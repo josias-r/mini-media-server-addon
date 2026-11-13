@@ -72,6 +72,23 @@ impl DbClient {
             [],
         )?;
 
+        // Normalize legacy mixed-case item_id rows while preserving the latest timestamp per user/item
+        conn.execute(
+            "DELETE FROM watch_history
+             WHERE rowid NOT IN (
+                 SELECT rowid FROM (
+                     SELECT rowid, MAX(last_watched_at)
+                     FROM watch_history
+                     GROUP BY api_key, LOWER(item_id)
+                 )
+             )",
+            [],
+        )?;
+        conn.execute(
+            "UPDATE watch_history SET item_id = LOWER(item_id) WHERE item_id != LOWER(item_id)",
+            [],
+        )?;
+
         Ok(())
     }
 
@@ -161,6 +178,7 @@ impl DbClient {
         item_id: &str,
         item_type: &str,
     ) -> Result<()> {
+        let item_id = item_id.trim().to_lowercase();
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO watch_history (api_key, item_id, item_type, last_watched_at) 
@@ -174,8 +192,9 @@ impl DbClient {
 
     pub fn get_torrent_watch_times(&self) -> Result<std::collections::HashMap<String, String>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn
-            .prepare("SELECT item_id, MAX(last_watched_at) FROM watch_history GROUP BY item_id")?;
+        let mut stmt = conn.prepare(
+            "SELECT LOWER(item_id), MAX(last_watched_at) FROM watch_history GROUP BY LOWER(item_id)",
+        )?;
         let history = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?;
@@ -183,15 +202,16 @@ impl DbClient {
         let mut map = std::collections::HashMap::new();
         for item in history {
             let (id, time) = item?;
-            map.insert(id.to_lowercase(), time);
+            map.insert(id, time);
         }
         Ok(map)
     }
 
     pub fn delete_watch_history(&self, item_id: &str) -> Result<()> {
+        let item_id = item_id.trim().to_lowercase();
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "DELETE FROM watch_history WHERE item_id = ?",
+            "DELETE FROM watch_history WHERE LOWER(item_id) = ?",
             params![item_id],
         )?;
         Ok(())
@@ -210,7 +230,11 @@ impl DbClient {
     pub fn get_user_watch_history(&self, api_key: &str) -> Result<Vec<(String, String)>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT LOWER(item_id), last_watched_at FROM watch_history WHERE api_key = ? ORDER BY last_watched_at DESC",
+            "SELECT LOWER(item_id), MAX(last_watched_at) as last_watched
+             FROM watch_history
+             WHERE api_key = ?
+             GROUP BY LOWER(item_id)
+             ORDER BY last_watched DESC",
         )?;
         let rows = stmt.query_map(params![api_key], |row| Ok((row.get(0)?, row.get(1)?)))?;
         let mut results = Vec::new();
@@ -223,7 +247,7 @@ impl DbClient {
     pub fn get_users_with_stats(&self) -> Result<Vec<UserRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT u.username, u.api_key, u.created_at, COUNT(w.item_id), MAX(w.last_watched_at)
+            "SELECT u.username, u.api_key, u.created_at, COUNT(DISTINCT LOWER(w.item_id)), MAX(w.last_watched_at)
              FROM users u
              LEFT JOIN watch_history w ON u.api_key = w.api_key
              GROUP BY u.id
@@ -244,5 +268,98 @@ impl DbClient {
             results.push(u?);
         }
         Ok(results)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn watch_history_normalizes_hash_case_on_update_query_and_delete() {
+        let db = DbClient::new(":memory:");
+        let api_key = db.create_user("alice").unwrap();
+        let upper_hash = "ABCDEF0123456789ABCDEF0123456789ABCDEF01";
+        let lower_hash = upper_hash.to_lowercase();
+
+        db.update_watch_history(&api_key, upper_hash, "torrent")
+            .unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE watch_history SET last_watched_at = '2020-01-01 00:00:00'",
+                [],
+            )
+            .unwrap();
+        }
+
+        db.update_watch_history(&api_key, &format!("  {}  ", lower_hash), "torrent")
+            .unwrap();
+
+        {
+            let conn = db.conn.lock().unwrap();
+            let count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM watch_history", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(count, 1);
+
+            let stored_id: String = conn
+                .query_row("SELECT item_id FROM watch_history", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(stored_id, lower_hash);
+        }
+
+        let watch_times = db.get_torrent_watch_times().unwrap();
+        assert_eq!(watch_times.len(), 1);
+        assert_ne!(watch_times.get(&lower_hash).unwrap(), "2020-01-01 00:00:00");
+
+        let user_history = db.get_user_watch_history(&api_key).unwrap();
+        assert_eq!(user_history.len(), 1);
+        assert_eq!(user_history[0].0, lower_hash);
+
+        let users = db.get_users_with_stats().unwrap();
+        assert_eq!(users[0].watch_count, 1);
+
+        db.delete_watch_history(upper_hash).unwrap();
+        assert!(db.get_torrent_watch_times().unwrap().is_empty());
+    }
+
+    #[test]
+    fn init_db_deduplicates_legacy_mixed_case_watch_history() {
+        let db = DbClient::new(":memory:");
+        let api_key = db.create_user("bob").unwrap();
+        let upper_hash = "DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF";
+        let lower_hash = upper_hash.to_lowercase();
+
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO watch_history (api_key, item_id, item_type, last_watched_at)
+                 VALUES (?, ?, 'torrent', '2024-01-01 00:00:00')",
+                params![&api_key, upper_hash],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO watch_history (api_key, item_id, item_type, last_watched_at)
+                 VALUES (?, ?, 'torrent', '2025-06-15 12:30:00')",
+                params![&api_key, &lower_hash],
+            )
+            .unwrap();
+        }
+
+        db.init_db().unwrap();
+
+        let watch_times = db.get_torrent_watch_times().unwrap();
+        assert_eq!(watch_times.len(), 1);
+        assert_eq!(
+            watch_times.get(&lower_hash).map(String::as_str),
+            Some("2025-06-15 12:30:00")
+        );
+
+        let conn = db.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM watch_history", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
     }
 }
