@@ -87,13 +87,24 @@ test.describe.serial("Mini Media Server E2E", () => {
     await expect(page.getByText("Verified • Welcome, alice")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Welcome, alice!" })).toBeVisible();
 
-    // Guided 3-step onboarding cards are shown (and raw key input is hidden by default)
+    // Stage 1 ("install"): Step 1 done, Step 2 active, Step 3 compact preview
     await expect(page.getByRole("heading", { name: "Personal Invite Activated" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Install the Addon in Stremio" })).toBeVisible();
     await expect(
       page.getByRole("heading", { name: "Pick Any Movie or Show & Press Play" }),
     ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Want Subtitles or Extra Features?" }),
+    ).toBeHidden();
     await expect(page.locator("#api-key-input")).toBeHidden();
+
+    // Jump link to Compatible Clients section below Download Stremio Free
+    const compatibleAppsLink = page.getByRole("link", {
+      name: /Or view other compatible apps \(Nuvio, Harbor\)/i,
+    });
+    await expect(compatibleAppsLink).toBeVisible();
+    await expect(compatibleAppsLink).toHaveAttribute("href", "#compatible-clients");
+    await expect(page.locator("#compatible-clients")).toBeVisible();
 
     // Toggling Change Key reveals the API key input
     await page.getByRole("button", { name: "Change Key" }).click();
@@ -113,7 +124,13 @@ test.describe.serial("Mini Media Server E2E", () => {
       page.getByRole("heading", { name: "My Active Downloads & Recent Streams" }),
     ).toBeVisible();
 
-    // Additional Stremio Addons / OpenSubtitles v3 section
+    // Mark Step 2 completed -> expands Step 3 with subtitles & extra addons info
+    await page.getByRole("button", { name: /I've Installed It — Next Step/i }).click();
+    await expect(page.getByRole("button", { name: "Show Install Steps" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Want Subtitles or Extra Features?" }),
+    ).toBeVisible();
+
     const subtitlesLink = page.getByRole("link", { name: "Get OpenSubtitles v3 (Subtitles)" });
     await expect(subtitlesLink).toBeVisible();
     await expect(subtitlesLink).toHaveAttribute(
@@ -121,10 +138,37 @@ test.describe.serial("Mini Media Server E2E", () => {
       "https://stremio-addons.net/addons/opensubtitles-v3",
     );
 
-    // Reloading preserves verified session via localStorage
+    // Step 2 completion is reversible
+    await page.getByRole("button", { name: "Show Install Steps" }).click();
+    await expect(installLink).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Want Subtitles or Extra Features?" }),
+    ).toBeHidden();
+
+    // Advance back to Step 3 and finish setup ("done")
+    await page.getByRole("button", { name: /I've Installed It — Next Step/i }).click();
+    await page.getByRole("button", { name: /Got It — Finish Setup/i }).click();
+
+    await expect(page.getByRole("heading", { name: "Personal Invite Activated" })).toBeHidden();
+    await expect(page.getByRole("heading", { name: "Install the Addon in Stremio" })).toBeHidden();
+    await expect(
+      page.getByRole("heading", { name: "Pick Any Movie or Show & Press Play" }),
+    ).toBeHidden();
+    await expect(
+      page.getByRole("heading", { name: "My Active Downloads & Recent Streams" }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Show Setup Guide" })).toBeVisible();
+
+    // Reloading preserves both verified session and "done" onboarding state via localStorage
     await page.reload();
     await expect(page.getByText("Verified • Welcome, alice")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Show Setup Guide" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Install the Addon in Stremio" })).toBeHidden();
+
+    // Show Setup Guide restores the 3-step onboarding flow
+    await page.getByRole("button", { name: "Show Setup Guide" }).click();
     await expect(page.getByRole("heading", { name: "Install the Addon in Stremio" })).toBeVisible();
+    await expect(installLink).toBeVisible();
   });
 
   test("User Portal and Admin Dashboard torrent rendering, filtering, and deletion", async ({
@@ -378,18 +422,33 @@ test.describe.serial("Mini Media Server E2E", () => {
     ).toBeVisible();
     await expect(page.getByRole("link", { name: "1-Click Install in Stremio" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Personal Invite Activated" })).toBeVisible();
-    await expect(
-      page.getByRole("link", { name: "Get OpenSubtitles v3 (Subtitles)" }),
-    ).toBeVisible();
 
-    const portalOverflow = await page.evaluate(() => ({
+    const portalInstallOverflow = await page.evaluate(() => ({
       docOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
       headerOverflow:
         (document.querySelector("header")?.scrollWidth ?? 0) > window.innerWidth ||
         (document.querySelector("header")?.getBoundingClientRect().right ?? 0) > window.innerWidth,
       mainOverflow: (document.querySelector("main")?.scrollWidth ?? 0) > window.innerWidth,
     }));
-    expect(portalOverflow).toEqual({
+    expect(portalInstallOverflow).toEqual({
+      docOverflow: false,
+      headerOverflow: false,
+      mainOverflow: false,
+    });
+
+    await page.getByRole("button", { name: /I've Installed It — Next Step/i }).click();
+    await expect(
+      page.getByRole("link", { name: "Get OpenSubtitles v3 (Subtitles)" }),
+    ).toBeVisible();
+
+    const portalWatchOverflow = await page.evaluate(() => ({
+      docOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+      headerOverflow:
+        (document.querySelector("header")?.scrollWidth ?? 0) > window.innerWidth ||
+        (document.querySelector("header")?.getBoundingClientRect().right ?? 0) > window.innerWidth,
+      mainOverflow: (document.querySelector("main")?.scrollWidth ?? 0) > window.innerWidth,
+    }));
+    expect(portalWatchOverflow).toEqual({
       docOverflow: false,
       headerOverflow: false,
       mainOverflow: false,

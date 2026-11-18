@@ -2,6 +2,8 @@ import { useSignal, useComputed } from "@preact/signals";
 import { useEffect } from "preact/hooks";
 import {
   AlertCircle,
+  ArrowDown,
+  ArrowRight,
   Captions,
   Check,
   CheckCircle2,
@@ -15,6 +17,7 @@ import {
   Loader2,
   Play,
   RefreshCw,
+  RotateCcw,
   ShieldCheck,
   Sparkles,
   Tv,
@@ -35,6 +38,9 @@ import {
 } from "../utils";
 
 const STORAGE_KEY = "mms_api_key";
+const ONBOARDING_STAGE_KEY = "mms_onboarding_stage";
+
+type OnboardingStage = "install" | "watch" | "done";
 
 interface UserPortalProps {
   onNavigate: (path: string) => void;
@@ -72,6 +78,7 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
   const apiKey = useSignal("");
   const showKey = useSignal(false);
   const showKeyEditor = useSignal(false);
+  const onboardingStage = useSignal<OnboardingStage>("install");
   const verifying = useSignal(false);
   const verification = useSignal<VerifyKeyResponse | null>(null);
   const verifyError = useSignal<string | null>(null);
@@ -96,6 +103,11 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
       verification.value?.active_torrents.some((t) => isDownloadingState(t.state, t.progress)),
     ),
   );
+
+  function updateOnboardingStage(stage: OnboardingStage) {
+    onboardingStage.value = stage;
+    localStorage.setItem(ONBOARDING_STAGE_KEY, stage);
+  }
 
   async function runVerify(key: string) {
     const trimmed = key.trim();
@@ -135,11 +147,20 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
     const params = new URLSearchParams(window.location.search);
     const keyFromQuery = params.get("key")?.trim();
     const savedKey = localStorage.getItem(STORAGE_KEY)?.trim() ?? "";
+    const savedStage = localStorage.getItem(ONBOARDING_STAGE_KEY);
+
+    if (savedStage === "install" || savedStage === "watch" || savedStage === "done") {
+      onboardingStage.value = savedStage;
+    }
+
     const initialKey = keyFromQuery || savedKey;
 
     if (initialKey) {
       apiKey.value = initialKey;
       if (keyFromQuery) {
+        if (keyFromQuery !== savedKey) {
+          updateOnboardingStage("install");
+        }
         localStorage.setItem(STORAGE_KEY, keyFromQuery);
         const cleanUrl = `${window.location.pathname}${window.location.hash}`;
         window.history.replaceState({}, "", cleanUrl);
@@ -185,9 +206,11 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
     apiKey.value = "";
     showKey.value = false;
     showKeyEditor.value = false;
+    onboardingStage.value = "install";
     verification.value = null;
     verifyError.value = null;
     localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(ONBOARDING_STAGE_KEY);
   }
 
   function renderApiKeyInput() {
@@ -227,6 +250,30 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
             {showKey.value ? <EyeOff class="h-4 w-4" /> : <Eye class="h-4 w-4" />}
           </button>
         </div>
+      </div>
+    );
+  }
+
+  function renderKeyEditorDrawer(borderClass: string) {
+    if (!showKeyEditor.value) return null;
+    return (
+      <div class={`mt-4 border-t pt-4 ${borderClass}`}>
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <label
+            for="api-key-input"
+            class="flex items-center gap-2 text-xs font-medium text-slate-300"
+          >
+            <KeyRound class="h-3.5 w-3.5 text-indigo-400" />
+            Your Saved API Key
+          </label>
+          {verifying.value && (
+            <Badge tone="slate">
+              <Loader2 class="h-3 w-3 animate-spin" />
+              Checking...
+            </Badge>
+          )}
+        </div>
+        <div class="mt-2">{renderApiKeyInput()}</div>
       </div>
     );
   }
@@ -280,9 +327,9 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
       <main class="mx-auto max-w-5xl space-y-6 px-3.5 py-6 pb-12 sm:space-y-10 sm:px-6 sm:py-10">
         {/* Hero & Onboarding / Quick Connect */}
         {isValidKey.value && verification.value ? (
-          <section class="space-y-5 sm:space-y-6">
-            <div class="text-left">
-              <div class="mb-3 flex flex-wrap items-center gap-2">
+          onboardingStage.value === "done" ? (
+            <section class="space-y-3">
+              <div class="flex flex-wrap items-center gap-2">
                 <Badge tone="emerald">
                   <CheckCircle2 class="h-3 w-3" />
                   Verified • Welcome, {verification.value.username}
@@ -293,36 +340,27 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
                   </span>
                 )}
               </div>
-              <h1 class="bg-gradient-to-r from-white via-slate-100 to-indigo-200 bg-clip-text text-2xl font-bold tracking-tight text-transparent sm:text-4xl">
-                Welcome, {verification.value.username}!
-              </h1>
-              <p class="mt-2 max-w-2xl text-sm leading-relaxed text-slate-400 sm:text-base">
-                Your personal invite is active. Follow these 3 quick steps to add Mini Media Server
-                to Stremio and start watching.
-              </p>
-            </div>
 
-            <div class="space-y-4">
-              {/* Step 1: Completed Invite */}
-              <div class="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-4 sm:p-5">
+              <div class="rounded-2xl border border-slate-800 bg-slate-900/75 p-4 sm:p-5">
                 <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div class="flex min-w-0 items-start gap-3.5">
-                    <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40">
-                      <Check class="h-5 w-5" />
-                    </div>
-                    <div class="min-w-0">
-                      <Badge tone="emerald">Step 1 • Completed</Badge>
-                      <h2 class="mt-1.5 text-base font-semibold text-white sm:text-lg">
-                        Personal Invite Activated
-                      </h2>
-                      <p class="mt-1 text-sm leading-relaxed text-slate-300">
-                        Your personal access pass is linked and saved on this device — no account
-                        setup or technical configuration needed.
-                      </p>
-                    </div>
+                  <div class="min-w-0">
+                    <h1 class="text-lg font-bold tracking-tight text-white sm:text-xl">
+                      Welcome, {verification.value.username}!
+                    </h1>
+                    <p class="mt-0.5 text-sm text-slate-400">
+                      Setup complete — your Stremio addon is ready. Need to set up another device?
+                    </p>
                   </div>
 
-                  <div class="flex shrink-0 flex-wrap items-center gap-2 pl-12 sm:pl-0">
+                  <div class="flex shrink-0 flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => updateOnboardingStage("install")}
+                      class="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3 py-1.5 text-xs font-semibold text-indigo-200 transition hover:bg-indigo-500/20"
+                    >
+                      <RotateCcw class="h-3.5 w-3.5" />
+                      Show Setup Guide
+                    </button>
                     <button
                       type="button"
                       onClick={() => {
@@ -343,148 +381,329 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
                   </div>
                 </div>
 
-                {showKeyEditor.value && (
-                  <div class="mt-4 border-t border-emerald-500/20 pt-4">
-                    <div class="flex flex-wrap items-center justify-between gap-2">
-                      <label
-                        for="api-key-input"
-                        class="flex items-center gap-2 text-xs font-medium text-slate-300"
+                {renderKeyEditorDrawer("border-slate-800")}
+              </div>
+            </section>
+          ) : (
+            <section class="space-y-5 sm:space-y-6">
+              <div class="text-left">
+                <div class="mb-3 flex flex-wrap items-center gap-2">
+                  <Badge tone="emerald">
+                    <CheckCircle2 class="h-3 w-3" />
+                    Verified • Welcome, {verification.value.username}
+                  </Badge>
+                  {info.value && info.value.retention_days > 0 && (
+                    <span class="inline-flex sm:hidden">
+                      <Badge tone="slate">Retention: {info.value.retention_days}d</Badge>
+                    </span>
+                  )}
+                </div>
+                <h1 class="bg-gradient-to-r from-white via-slate-100 to-indigo-200 bg-clip-text text-2xl font-bold tracking-tight text-transparent sm:text-4xl">
+                  Welcome, {verification.value.username}!
+                </h1>
+                <p class="mt-2 max-w-2xl text-sm leading-relaxed text-slate-400 sm:text-base">
+                  Your personal invite is active. Follow these 3 quick steps to add Mini Media
+                  Server to Stremio and start watching.
+                </p>
+              </div>
+
+              <div class="space-y-4">
+                {/* Step 1: Completed Invite */}
+                <div class="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-4 sm:p-5">
+                  <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div class="flex min-w-0 items-start gap-3.5">
+                      <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40">
+                        <Check class="h-5 w-5" />
+                      </div>
+                      <div class="min-w-0">
+                        <Badge tone="emerald">Step 1 • Completed</Badge>
+                        <h2 class="mt-1.5 text-base font-semibold text-white sm:text-lg">
+                          Personal Invite Activated
+                        </h2>
+                        <p class="mt-1 text-sm leading-relaxed text-slate-300">
+                          Your personal access pass is linked and saved on this device — no account
+                          setup or technical configuration needed.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div class="flex shrink-0 flex-wrap items-center gap-2 pl-12 sm:pl-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          showKeyEditor.value = !showKeyEditor.value;
+                        }}
+                        class="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-slate-700/80 bg-slate-900/80 px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:border-slate-600 hover:bg-slate-800 hover:text-white"
                       >
                         <KeyRound class="h-3.5 w-3.5 text-indigo-400" />
-                        Your Saved API Key
-                      </label>
-                      {verifying.value && (
-                        <Badge tone="slate">
-                          <Loader2 class="h-3 w-3 animate-spin" />
-                          Checking...
-                        </Badge>
-                      )}
+                        {showKeyEditor.value ? "Hide Key" : "Change Key"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleClearKey}
+                        class="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-1.5 text-xs font-medium text-slate-400 transition hover:border-rose-500/40 hover:text-rose-300"
+                      >
+                        Disconnect
+                      </button>
                     </div>
-                    <div class="mt-2">{renderApiKeyInput()}</div>
+                  </div>
+
+                  {renderKeyEditorDrawer("border-emerald-500/20")}
+                </div>
+
+                {/* Step 2: Install Addon (Spotlight vs Collapsed Completed) */}
+                {onboardingStage.value === "install" ? (
+                  <div class="rounded-2xl border-2 border-indigo-500/50 bg-slate-900/85 p-4 shadow-2xl shadow-indigo-500/10 backdrop-blur-sm sm:p-7">
+                    <div class="flex items-start gap-3.5">
+                      <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-indigo-500 text-sm font-bold text-white shadow-lg shadow-indigo-500/30">
+                        2
+                      </div>
+                      <div class="min-w-0 flex-1">
+                        <Badge tone="indigo">Step 2 • Do This Now</Badge>
+                        <h2 class="mt-1.5 text-lg font-bold text-white sm:text-xl">
+                          Install the Addon in Stremio
+                        </h2>
+                        <p class="mt-1 text-sm leading-relaxed text-slate-300">
+                          Add Mini Media Server to Stremio with one tap so movies and shows appear
+                          right inside your app.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* First-time Stremio helper + Compatible Clients jump link */}
+                    <div class="mt-4 flex flex-col gap-3 rounded-xl border border-slate-800 bg-slate-950/75 p-3.5 sm:mt-5 sm:flex-row sm:items-center sm:justify-between sm:p-4">
+                      <div class="min-w-0">
+                        <p class="text-sm font-medium text-slate-100">
+                          Don&apos;t have Stremio installed yet?
+                        </p>
+                        <p class="mt-0.5 text-xs leading-relaxed text-slate-400">
+                          Download the free Stremio app and create a free account first, then come
+                          back to this page and click the button below.
+                        </p>
+                      </div>
+                      <div class="flex shrink-0 flex-col items-stretch gap-1.5 sm:items-end">
+                        <a
+                          href="https://www.stremio.com/downloads"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          class="inline-flex min-h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3.5 py-2 text-xs font-semibold text-indigo-300 transition hover:bg-indigo-500/20"
+                        >
+                          Download Stremio Free
+                          <ExternalLink class="h-3.5 w-3.5" />
+                        </a>
+                        <a
+                          href="#compatible-clients"
+                          class="inline-flex items-center justify-center gap-1 text-[11px] font-medium text-slate-400 transition hover:text-indigo-300 sm:justify-end"
+                        >
+                          Or view other compatible apps (Nuvio, Harbor)
+                          <ArrowDown class="h-3 w-3" />
+                        </a>
+                      </div>
+                    </div>
+
+                    {/* Primary 1-Click Install CTA */}
+                    <div class="mt-4 sm:mt-5">
+                      <a
+                        href={stremioLink.value}
+                        class="inline-flex min-h-12 w-full items-center justify-center gap-2.5 rounded-xl bg-indigo-600 px-6 py-4 text-base font-semibold text-white shadow-lg shadow-indigo-600/30 transition hover:bg-indigo-500 active:scale-[0.99]"
+                      >
+                        <Play class="h-5 w-5 fill-current" />
+                        1-Click Install in Stremio
+                      </a>
+                      <p class="mt-2 text-center text-xs text-slate-400">
+                        A popup will open inside Stremio — simply click{" "}
+                        <strong class="text-slate-200">Install</strong> to finish.
+                      </p>
+                    </div>
+
+                    {/* Secondary manual copy option */}
+                    <div class="mt-5 rounded-xl border border-slate-800/90 bg-slate-950/70 p-3.5 sm:p-4">
+                      <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div class="min-w-0">
+                          <p class="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                            Using another app or manual setup?
+                          </p>
+                          <p class="mt-0.5 text-xs text-slate-400">
+                            Copy your personal addon link and paste it into{" "}
+                            <strong class="text-slate-200">Settings → Addons</strong>.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleCopyManifest}
+                          class={`inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl border px-4 py-2 text-xs font-semibold transition active:scale-[0.99] ${
+                            copied.value
+                              ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
+                              : "border-slate-700 bg-slate-800 text-slate-100 hover:border-slate-600 hover:bg-slate-700/80"
+                          }`}
+                        >
+                          {copied.value ? (
+                            <>
+                              <Check class="h-3.5 w-3.5" />
+                              Copied!
+                            </>
+                          ) : (
+                            <>
+                              <ClipboardCopy class="h-3.5 w-3.5" />
+                              Copy Manifest URL
+                            </>
+                          )}
+                        </button>
+                      </div>
+                      <code class="mt-2.5 block break-all rounded-lg border border-slate-800/80 bg-slate-900/90 px-3 py-2 font-mono text-xs leading-relaxed text-indigo-300 select-all">
+                        {manifestUrl.value}
+                      </code>
+                    </div>
+
+                    {/* Step 2 Completion Trigger */}
+                    <div class="mt-5 flex flex-col gap-3 border-t border-slate-800 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                      <p class="text-xs text-slate-400 sm:text-sm">
+                        Already clicked install in your app?
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => updateOnboardingStage("watch")}
+                        class="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-4 py-2 text-sm font-semibold text-emerald-200 transition hover:bg-emerald-500/25 active:scale-[0.99]"
+                      >
+                        I&apos;ve Installed It — Next Step
+                        <ArrowRight class="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div class="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-4 sm:p-5">
+                    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div class="flex min-w-0 items-start gap-3.5">
+                        <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40">
+                          <Check class="h-5 w-5" />
+                        </div>
+                        <div class="min-w-0">
+                          <Badge tone="emerald">Step 2 • Completed</Badge>
+                          <h2 class="mt-1.5 text-base font-semibold text-white sm:text-lg">
+                            Install the Addon in Stremio
+                          </h2>
+                          <p class="mt-1 text-sm leading-relaxed text-slate-300">
+                            Addon installed in your media player.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div class="flex shrink-0 items-center pl-12 sm:pl-0">
+                        <button
+                          type="button"
+                          onClick={() => updateOnboardingStage("install")}
+                          class="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-slate-700/80 bg-slate-900/80 px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:border-slate-600 hover:bg-slate-800 hover:text-white"
+                        >
+                          Show Install Steps
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Step 3: Start Watching & Subtitles (Compact Preview vs Expanded Spotlight) */}
+                {onboardingStage.value === "install" ? (
+                  <div class="rounded-2xl border border-slate-800/80 bg-slate-900/40 p-4 sm:p-5">
+                    <div class="flex items-center gap-3.5">
+                      <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-700 bg-slate-800 text-sm font-bold text-slate-300">
+                        3
+                      </div>
+                      <div class="min-w-0 flex-1">
+                        <Badge tone="slate">Step 3 • Up Next</Badge>
+                        <h2 class="mt-1 text-base font-semibold text-slate-200 sm:text-lg">
+                          Pick Any Movie or Show &amp; Press Play
+                        </h2>
+                        <p class="mt-0.5 text-xs text-slate-400">
+                          Complete Step 2 above to unlock watching tips &amp; subtitle addons.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div class="rounded-2xl border-2 border-indigo-500/50 bg-slate-900/85 p-4 shadow-2xl shadow-indigo-500/10 backdrop-blur-sm sm:p-7">
+                    <div class="flex items-start gap-3.5">
+                      <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-indigo-500 text-sm font-bold text-white shadow-lg shadow-indigo-500/30">
+                        3
+                      </div>
+                      <div class="min-w-0 flex-1">
+                        <Badge tone="indigo">Step 3 • Final Step</Badge>
+                        <h2 class="mt-1.5 text-lg font-bold text-white sm:text-xl">
+                          Pick Any Movie or Show &amp; Press Play
+                        </h2>
+                        <p class="mt-1 text-sm leading-relaxed text-slate-300">
+                          Open any movie or series in Stremio and choose a stream labeled{" "}
+                          <strong class="text-white">Mini Media Server</strong> from the list.
+                        </p>
+                        <p class="mt-2 text-xs leading-relaxed text-slate-400">
+                          <strong class="text-slate-300">Watching on a Smart TV?</strong> Set it up
+                          once on your phone or computer and sign into the same Stremio account on
+                          your TV — your addon syncs automatically.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Additional Stremio Addons (Subtitles & More) */}
+                    <div class="mt-4 rounded-xl border border-slate-800 bg-slate-950/75 p-3.5 sm:mt-5 sm:p-4">
+                      <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div class="flex min-w-0 items-start gap-3">
+                          <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-indigo-500/30 bg-indigo-500/10 text-indigo-300">
+                            <Captions class="h-4 w-4" />
+                          </div>
+                          <div class="min-w-0">
+                            <h3 class="text-sm font-semibold text-white sm:text-base">
+                              Want Subtitles or Extra Features?
+                            </h3>
+                            <p class="mt-1 text-xs leading-relaxed text-slate-400 sm:text-sm">
+                              Mini Media Server is just a Stremio addon for streaming movies and
+                              series. Because Stremio is modular, you can freely install additional
+                              community addons alongside it — for example, to get automatic
+                              subtitles in any language.
+                            </p>
+                          </div>
+                        </div>
+
+                        <div class="flex shrink-0 flex-col gap-2 sm:items-end">
+                          <a
+                            href="https://stremio-addons.net/addons/opensubtitles-v3"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            class="inline-flex min-h-9 items-center justify-center gap-2 rounded-xl border border-indigo-500/30 bg-indigo-500/15 px-3.5 py-2 text-xs font-semibold text-indigo-200 transition hover:bg-indigo-500/25"
+                          >
+                            Get OpenSubtitles v3 (Subtitles)
+                            <ExternalLink class="h-3.5 w-3.5" />
+                          </a>
+                          <a
+                            href="https://stremio-addons.net/"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            class="inline-flex min-h-9 items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-800/80 px-3.5 py-2 text-xs font-semibold text-slate-200 transition hover:border-slate-600 hover:bg-slate-800"
+                          >
+                            Browse More Stremio Addons
+                            <ExternalLink class="h-3.5 w-3.5" />
+                          </a>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Step 3 Finish Trigger */}
+                    <div class="mt-5 flex flex-col gap-3 border-t border-slate-800 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                      <p class="text-xs text-slate-400 sm:text-sm">
+                        All set? Hide this guide so your active downloads are front and center.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => updateOnboardingStage("done")}
+                        class="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-600/25 transition hover:bg-indigo-500 active:scale-[0.99]"
+                      >
+                        <Check class="h-4 w-4" />
+                        Got It — Finish Setup
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
-
-              {/* Step 2: Primary Install Spotlight */}
-              <div class="rounded-2xl border-2 border-indigo-500/50 bg-slate-900/85 p-4 shadow-2xl shadow-indigo-500/10 backdrop-blur-sm sm:p-7">
-                <div class="flex items-start gap-3.5">
-                  <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-indigo-500 text-sm font-bold text-white shadow-lg shadow-indigo-500/30">
-                    2
-                  </div>
-                  <div class="min-w-0 flex-1">
-                    <Badge tone="indigo">Step 2 • Do This Now</Badge>
-                    <h2 class="mt-1.5 text-lg font-bold text-white sm:text-xl">
-                      Install the Addon in Stremio
-                    </h2>
-                    <p class="mt-1 text-sm leading-relaxed text-slate-300">
-                      Add Mini Media Server to Stremio with one tap so movies and shows appear right
-                      inside your app.
-                    </p>
-                  </div>
-                </div>
-
-                {/* First-time Stremio helper */}
-                <div class="mt-4 flex flex-col gap-3 rounded-xl border border-slate-800 bg-slate-950/75 p-3.5 sm:mt-5 sm:flex-row sm:items-center sm:justify-between sm:p-4">
-                  <div class="min-w-0">
-                    <p class="text-sm font-medium text-slate-100">
-                      Don&apos;t have Stremio installed yet?
-                    </p>
-                    <p class="mt-0.5 text-xs leading-relaxed text-slate-400">
-                      Download the free Stremio app and create a free account first, then come back
-                      to this page and click the button below.
-                    </p>
-                  </div>
-                  <a
-                    href="https://www.stremio.com/downloads"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    class="inline-flex min-h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3.5 py-2 text-xs font-semibold text-indigo-300 transition hover:bg-indigo-500/20"
-                  >
-                    Download Stremio Free
-                    <ExternalLink class="h-3.5 w-3.5" />
-                  </a>
-                </div>
-
-                {/* Primary 1-Click Install CTA */}
-                <div class="mt-4 sm:mt-5">
-                  <a
-                    href={stremioLink.value}
-                    class="inline-flex min-h-12 w-full items-center justify-center gap-2.5 rounded-xl bg-indigo-600 px-6 py-4 text-base font-semibold text-white shadow-lg shadow-indigo-600/30 transition hover:bg-indigo-500 active:scale-[0.99]"
-                  >
-                    <Play class="h-5 w-5 fill-current" />
-                    1-Click Install in Stremio
-                  </a>
-                  <p class="mt-2 text-center text-xs text-slate-400">
-                    A popup will open inside Stremio — simply click{" "}
-                    <strong class="text-slate-200">Install</strong> to finish.
-                  </p>
-                </div>
-
-                {/* Secondary manual copy option */}
-                <div class="mt-5 rounded-xl border border-slate-800/90 bg-slate-950/70 p-3.5 sm:p-4">
-                  <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div class="min-w-0">
-                      <p class="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                        Using another app or manual setup?
-                      </p>
-                      <p class="mt-0.5 text-xs text-slate-400">
-                        Copy your personal addon link and paste it into{" "}
-                        <strong class="text-slate-200">Settings → Addons</strong>.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={handleCopyManifest}
-                      class={`inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl border px-4 py-2 text-xs font-semibold transition active:scale-[0.99] ${
-                        copied.value
-                          ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
-                          : "border-slate-700 bg-slate-800 text-slate-100 hover:border-slate-600 hover:bg-slate-700/80"
-                      }`}
-                    >
-                      {copied.value ? (
-                        <>
-                          <Check class="h-3.5 w-3.5" />
-                          Copied!
-                        </>
-                      ) : (
-                        <>
-                          <ClipboardCopy class="h-3.5 w-3.5" />
-                          Copy Manifest URL
-                        </>
-                      )}
-                    </button>
-                  </div>
-                  <code class="mt-2.5 block break-all rounded-lg border border-slate-800/80 bg-slate-900/90 px-3 py-2 font-mono text-xs leading-relaxed text-indigo-300 select-all">
-                    {manifestUrl.value}
-                  </code>
-                </div>
-              </div>
-
-              {/* Step 3: Start Watching */}
-              <div class="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 sm:p-5">
-                <div class="flex items-start gap-3.5">
-                  <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-700 bg-slate-800 text-sm font-bold text-slate-200">
-                    3
-                  </div>
-                  <div class="min-w-0 flex-1">
-                    <Badge tone="slate">Step 3 • Start Watching</Badge>
-                    <h2 class="mt-1.5 text-base font-semibold text-white sm:text-lg">
-                      Pick Any Movie or Show &amp; Press Play
-                    </h2>
-                    <p class="mt-1 text-sm leading-relaxed text-slate-300">
-                      Open any movie or series in Stremio and choose a stream labeled{" "}
-                      <strong class="text-white">Mini Media Server</strong> from the list.
-                    </p>
-                    <p class="mt-2 text-xs leading-relaxed text-slate-400">
-                      <strong class="text-slate-300">Watching on a Smart TV?</strong> Set it up once
-                      on your phone or computer and sign into the same Stremio account on your TV —
-                      your addon syncs automatically.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
+            </section>
+          )
         ) : (
           <section class="space-y-5 sm:space-y-6">
             <div class="text-left">
@@ -709,7 +928,7 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
         )}
 
         {/* Compatible Clients */}
-        <section class="space-y-3.5 sm:space-y-4">
+        <section id="compatible-clients" class="scroll-mt-20 space-y-3.5 sm:space-y-4">
           <div class="flex items-center gap-2.5">
             <Tv class="h-5 w-5 shrink-0 text-indigo-400" />
             <h2 class="text-lg font-semibold text-white">Compatible Clients</h2>
@@ -738,48 +957,6 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
                 </a>
               </div>
             ))}
-          </div>
-        </section>
-
-        {/* Additional Stremio Addons (Subtitles & More) */}
-        <section class="rounded-2xl border border-slate-800 bg-slate-900/55 p-4 sm:p-6">
-          <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div class="flex min-w-0 items-start gap-3.5">
-              <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-indigo-500/30 bg-indigo-500/10 text-indigo-300">
-                <Captions class="h-5 w-5" />
-              </div>
-              <div class="min-w-0">
-                <h2 class="text-base font-semibold text-white sm:text-lg">
-                  Want Subtitles or Extra Features?
-                </h2>
-                <p class="mt-1 max-w-2xl text-sm leading-relaxed text-slate-400">
-                  Mini Media Server is just a Stremio addon for streaming movies and series. Because
-                  Stremio is modular, you can freely install additional community addons alongside
-                  it — for example, to get automatic subtitles in any language.
-                </p>
-              </div>
-            </div>
-
-            <div class="flex shrink-0 flex-col gap-2 sm:flex-row sm:items-center">
-              <a
-                href="https://stremio-addons.net/addons/opensubtitles-v3"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-indigo-500/30 bg-indigo-500/15 px-4 py-2 text-xs font-semibold text-indigo-200 transition hover:bg-indigo-500/25"
-              >
-                Get OpenSubtitles v3 (Subtitles)
-                <ExternalLink class="h-3.5 w-3.5" />
-              </a>
-              <a
-                href="https://stremio-addons.net/"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-800/80 px-4 py-2 text-xs font-semibold text-slate-200 transition hover:border-slate-600 hover:bg-slate-800"
-              >
-                Browse More Stremio Addons
-                <ExternalLink class="h-3.5 w-3.5" />
-              </a>
-            </div>
           </div>
         </section>
       </main>
