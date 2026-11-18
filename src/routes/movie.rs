@@ -1,5 +1,5 @@
 use super::{AppState, require_valid_api_key};
-use crate::cinemeta::get_cinemeta_title;
+use crate::cinemeta::get_or_fetch_cinemeta_title;
 use crate::jackett::TorznabParams;
 use crate::stream_builder::build_stream_response;
 use axum::{
@@ -22,7 +22,9 @@ pub async fn movie_stream(
         imdb_id: id.clone(),
     }];
 
-    if let Some(title) = get_cinemeta_title(&state.http_client, "movie", &id).await {
+    if let Some(title) =
+        get_or_fetch_cinemeta_title(&state.http_client, &state.db, "movie", &id).await
+    {
         expected_title = title.clone();
         if state.config.jackett_search_type == "text" {
             fetch_plans = vec![TorznabParams::MovieText { query: title }];
