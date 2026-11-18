@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.4](https://github.com/josias-r/mini-media-server-addon/compare/v0.1.3...v0.1.4) (2026-11-18)
+
+
+### Bug Fixes
+
+* add iOS App Store warning and web app guidance to install steps ([c6c9e0a](https://github.com/josias-r/mini-media-server-addon/commit/c6c9e0aef4cf3902fd6fdc8dd01cc400554fcbd7))
+
+
+### Code Refactoring
+
+* extract reusable UI components and modularize app pages ([34dca60](https://github.com/josias-r/mini-media-server-addon/commit/34dca60dcca6fdbe3e2b67a7439d35669d8384bc))
+
 ## [0.1.3](https://github.com/josias-r/mini-media-server-addon/compare/v0.1.2...v0.1.3) (2026-11-18)
 
 
