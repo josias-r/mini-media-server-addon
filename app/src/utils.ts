@@ -134,3 +134,12 @@ export function maskApiKey(key: string): string {
 export function clampProgressPct(progress: number): number {
   return Math.min(100, Math.max(0, Math.round(progress * 100)));
 }
+
+export function isIosDevice(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  if (/iPad|iPhone|iPod/i.test(ua)) {
+    return true;
+  }
+  return /Macintosh/i.test(ua) && navigator.maxTouchPoints > 1;
+}

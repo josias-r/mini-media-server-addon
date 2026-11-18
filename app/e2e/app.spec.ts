@@ -105,6 +105,7 @@ test.describe.serial("Mini Media Server E2E", () => {
     await expect(compatibleAppsLink).toBeVisible();
     await expect(compatibleAppsLink).toHaveAttribute("href", "#compatible-clients");
     await expect(page.locator("#compatible-clients")).toBeVisible();
+    await expect(page.getByTestId("ios-install-warning")).toBeHidden();
 
     // Toggling Change Key reveals the API key input
     await page.getByRole("button", { name: "Change Key" }).click();
@@ -567,5 +568,59 @@ test.describe.serial("Mini Media Server E2E", () => {
 
     await page.unroute("**/api/admin/overview");
     await page.unroute("**/api/admin/torrents/*");
+  });
+
+  test("iOS devices see App Store warning and web app guidance in Step 2", async ({ browser }) => {
+    const context = await browser.newContext({
+      viewport: { width: 375, height: 812 },
+      userAgent:
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+    });
+
+    try {
+      const page = await context.newPage();
+      const iosKey = "22222222-3333-4444-5555-666666666666";
+
+      await page.route("**/api/verify*", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            valid: true,
+            username: "iosuser",
+            created_at: "2026-11-18 18:00:00",
+            active_torrents: [],
+          }),
+        });
+      });
+
+      await page.goto(`/?key=${encodeURIComponent(iosKey)}`);
+      await expect(
+        page.getByRole("heading", { name: "Install the Addon in Stremio" }),
+      ).toBeVisible();
+
+      const warning = page.getByTestId("ios-install-warning");
+      await expect(warning).toBeVisible();
+      await expect(warning).toContainText(
+        "Apple is actively removing Stremio-compatible apps from the App Store",
+      );
+      await expect(warning).toContainText("installing Stremio as a web app");
+      await expect(warning).toContainText("looking online for a currently working iOS app");
+
+      const webAppLink = warning.getByRole("link", { name: "Open Stremio Web App" });
+      await expect(webAppLink).toBeVisible();
+      await expect(webAppLink).toHaveAttribute("href", "https://web.stremio.com/");
+
+      const overflow = await page.evaluate(() => ({
+        docOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+        mainOverflow: (document.querySelector("main")?.scrollWidth ?? 0) > window.innerWidth,
+      }));
+      expect(overflow).toEqual({
+        docOverflow: false,
+        mainOverflow: false,
+      });
+    } finally {
+      await context.close();
+    }
   });
 });
