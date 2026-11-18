@@ -85,6 +85,22 @@ test.describe.serial("Mini Media Server E2E", () => {
     // Query param is stripped from URL and stored in localStorage
     await expect(page).toHaveURL("http://localhost:7099/");
     await expect(page.getByText("Verified • Welcome, alice")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Welcome, alice!" })).toBeVisible();
+
+    // Guided 3-step onboarding cards are shown (and raw key input is hidden by default)
+    await expect(page.getByRole("heading", { name: "Personal Invite Activated" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Install the Addon in Stremio" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Pick Any Movie or Show & Press Play" }),
+    ).toBeVisible();
+    await expect(page.locator("#api-key-input")).toBeHidden();
+
+    // Toggling Change Key reveals the API key input
+    await page.getByRole("button", { name: "Change Key" }).click();
+    await expect(page.locator("#api-key-input")).toBeVisible();
+    await page.getByRole("button", { name: "Hide Key" }).click();
+    await expect(page.locator("#api-key-input")).toBeHidden();
+
     await expect(page.locator("code", { hasText: `/${aliceApiKey}/manifest.json` })).toBeVisible();
 
     const installLink = page.getByRole("link", { name: "1-Click Install in Stremio" });
@@ -97,9 +113,18 @@ test.describe.serial("Mini Media Server E2E", () => {
       page.getByRole("heading", { name: "My Active Downloads & Recent Streams" }),
     ).toBeVisible();
 
+    // Additional Stremio Addons / OpenSubtitles v3 section
+    const subtitlesLink = page.getByRole("link", { name: "Get OpenSubtitles v3 (Subtitles)" });
+    await expect(subtitlesLink).toBeVisible();
+    await expect(subtitlesLink).toHaveAttribute(
+      "href",
+      "https://stremio-addons.net/addons/opensubtitles-v3",
+    );
+
     // Reloading preserves verified session via localStorage
     await page.reload();
     await expect(page.getByText("Verified • Welcome, alice")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Install the Addon in Stremio" })).toBeVisible();
   });
 
   test("User Portal and Admin Dashboard torrent rendering, filtering, and deletion", async ({
@@ -352,6 +377,10 @@ test.describe.serial("Mini Media Server E2E", () => {
       ),
     ).toBeVisible();
     await expect(page.getByRole("link", { name: "1-Click Install in Stremio" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Personal Invite Activated" })).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: "Get OpenSubtitles v3 (Subtitles)" }),
+    ).toBeVisible();
 
     const portalOverflow = await page.evaluate(() => ({
       docOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
