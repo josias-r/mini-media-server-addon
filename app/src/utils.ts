@@ -125,3 +125,12 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     return false;
   }
 }
+
+export function maskApiKey(key: string): string {
+  if (key.length <= 12) return "••••••••••••";
+  return `${key.slice(0, 8)}••••••••••••${key.slice(-6)}`;
+}
+
+export function clampProgressPct(progress: number): number {
+  return Math.min(100, Math.max(0, Math.round(progress * 100)));
+}

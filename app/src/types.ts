@@ -67,3 +67,24 @@ export interface CreatedUserResponse {
   api_key: string;
   created_at: string;
 }
+
+export type OnboardingStage = "install" | "watch" | "done";
+
+export type TorrentFilter = "all" | "downloading" | "seeding" | "unwatched";
+
+export type TorrentSort =
+  | "added_desc"
+  | "added_asc"
+  | "size_desc"
+  | "watched_desc"
+  | "progress_desc";
+
+export interface AdminStats {
+  userCount: number;
+  totalStreams: number;
+  totalBytes: number;
+  torrentCount: number;
+  dlSpeed: number;
+  upSpeed: number;
+  downloadingCount: number;
+}

@@ -1,19 +1,10 @@
 import { useSignal } from "@preact/signals";
-import {
-  Check,
-  ClipboardCopy,
-  Eye,
-  EyeOff,
-  KeyRound,
-  Link2,
-  Loader2,
-  Trash2,
-  UserPlus,
-  X,
-} from "lucide-preact";
+import { Loader2, UserPlus } from "lucide-preact";
 import { createUser, deleteUser } from "../api";
+import { AdminUserRow } from "../components/admin/AdminUserRow";
+import { CreatedUserBanner } from "../components/admin/CreatedUserBanner";
 import type { AdminUser, CreatedUserResponse } from "../types";
-import { buildInviteUrl, buildManifestUrl, copyToClipboard, formatRelativeTime } from "../utils";
+import { buildInviteUrl, copyToClipboard } from "../utils";
 
 interface AdminUsersProps {
   users: AdminUser[];
@@ -87,16 +78,11 @@ export function AdminUsers({ users, effectivePublicUrl, onUserMutated, onError }
     };
   }
 
-  function maskKey(key: string): string {
-    if (key.length <= 12) return "••••••••••••";
-    return `${key.slice(0, 8)}••••••••••••${key.slice(-6)}`;
-  }
-
   return (
     <section class="space-y-3.5 sm:space-y-4">
       <div class="flex flex-wrap items-center justify-between gap-3 sm:gap-4">
         <div>
-          <h2 class="text-lg font-semibold text-white">Users & Invite Links</h2>
+          <h2 class="text-lg font-semibold text-white">Users &amp; Invite Links</h2>
           <p class="text-xs text-slate-400">
             Create API keys and share 1-click invite links that auto-configure the user portal.
           </p>
@@ -135,54 +121,20 @@ export function AdminUsers({ users, effectivePublicUrl, onUserMutated, onError }
       )}
 
       {lastCreatedUser.value && (
-        <div class="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4">
-          <div class="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p class="text-sm font-semibold text-emerald-300">
-                User “{lastCreatedUser.value.username}” created!
-              </p>
-              <p class="mt-0.5 text-xs text-emerald-200/80">
-                Share the invite link below — it fills in their API key automatically.
-              </p>
-            </div>
-            <div class="flex w-full items-center gap-2 sm:w-auto">
-              <button
-                type="button"
-                onClick={() =>
-                  void triggerCopy(
-                    "new-invite",
-                    buildInviteUrl(effectivePublicUrl, lastCreatedUser.value?.api_key ?? ""),
-                  )
-                }
-                class="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-emerald-500 sm:flex-initial sm:py-1.5"
-              >
-                {copiedToken.value === "new-invite" ? (
-                  <>
-                    <Check class="h-3.5 w-3.5" />
-                    Copied Invite!
-                  </>
-                ) : (
-                  <>
-                    <Link2 class="h-3.5 w-3.5" />
-                    Copy Invite Link
-                  </>
-                )}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  lastCreatedUser.value = null;
-                }}
-                class="rounded-lg p-1.5 text-emerald-300/70 hover:bg-emerald-500/20 hover:text-emerald-200 sm:p-1"
-              >
-                <X class="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-          <div class="mt-3 rounded-lg bg-slate-950/60 px-3 py-2 font-mono text-xs break-all text-emerald-200">
-            {buildInviteUrl(effectivePublicUrl, lastCreatedUser.value.api_key)}
-          </div>
-        </div>
+        <CreatedUserBanner
+          user={lastCreatedUser.value}
+          inviteUrl={buildInviteUrl(effectivePublicUrl, lastCreatedUser.value.api_key)}
+          copied={copiedToken.value === "new-invite"}
+          onCopyInvite={() =>
+            void triggerCopy(
+              "new-invite",
+              buildInviteUrl(effectivePublicUrl, lastCreatedUser.value?.api_key ?? ""),
+            )
+          }
+          onDismiss={() => {
+            lastCreatedUser.value = null;
+          }}
+        />
       )}
 
       <div class="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70">
@@ -203,155 +155,26 @@ export function AdminUsers({ users, effectivePublicUrl, onUserMutated, onError }
                 </tr>
               </thead>
               <tbody class="block divide-y divide-slate-800/80 sm:table-row-group">
-                {users.map((user) => {
-                  const revealed = Boolean(revealedKeys.value[user.api_key]);
-                  const inviteToken = `invite-${user.api_key}`;
-                  const manifestToken = `manifest-${user.api_key}`;
-                  const keyToken = `key-${user.api_key}`;
-                  const confirming = confirmDeleteUserKey.value === user.api_key;
-                  const deleting = deletingUserKey.value === user.api_key;
-
-                  return (
-                    <tr
-                      key={user.api_key}
-                      class="flex flex-col gap-2.5 p-4 transition hover:bg-slate-800/30 sm:table-row sm:p-0"
-                    >
-                      <td class="flex items-center justify-between gap-2 font-medium text-white sm:table-cell sm:px-4 sm:py-3.5">
-                        <span class="truncate">{user.username}</span>
-                        <span class="shrink-0 text-xs font-normal text-slate-400 sm:hidden">
-                          Created {formatRelativeTime(user.created_at)}
-                        </span>
-                      </td>
-                      <td class="block sm:table-cell sm:px-4 sm:py-3.5">
-                        <div class="flex items-center justify-between gap-1.5 rounded-xl border border-slate-800/80 bg-slate-950/80 px-3 py-2 sm:justify-start sm:rounded-none sm:border-0 sm:bg-transparent sm:p-0">
-                          <code class="min-w-0 truncate font-mono text-xs text-indigo-300 sm:rounded-md sm:bg-slate-950/80 sm:px-2 sm:py-1">
-                            {revealed ? user.api_key : maskKey(user.api_key)}
-                          </code>
-                          <button
-                            type="button"
-                            onClick={() => toggleRevealKey(user.api_key)}
-                            title={revealed ? "Hide key" : "Reveal key"}
-                            class="shrink-0 rounded-md p-1.5 text-slate-400 transition hover:bg-slate-800 hover:text-slate-200 sm:p-1"
-                          >
-                            {revealed ? (
-                              <EyeOff class="h-3.5 w-3.5" />
-                            ) : (
-                              <Eye class="h-3.5 w-3.5" />
-                            )}
-                          </button>
-                        </div>
-                      </td>
-                      <td class="flex items-center justify-between text-xs text-slate-300 tabular-nums sm:table-cell sm:px-4 sm:py-3.5">
-                        <div>
-                          {user.watch_count} stream{user.watch_count === 1 ? "" : "s"}
-                        </div>
-                        <div class="text-slate-500">
-                          Last: {formatRelativeTime(user.last_watched_at)}
-                        </div>
-                      </td>
-                      <td class="hidden text-xs whitespace-nowrap text-slate-400 sm:table-cell sm:px-4 sm:py-3.5">
-                        {formatRelativeTime(user.created_at)}
-                      </td>
-                      <td class="block pt-1 sm:table-cell sm:px-4 sm:py-3.5 sm:pt-3.5">
-                        <div class="flex flex-wrap items-center justify-end gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              void triggerCopy(
-                                inviteToken,
-                                buildInviteUrl(effectivePublicUrl, user.api_key),
-                              )
-                            }
-                            title="Copy 1-click user invite link"
-                            class="inline-flex flex-1 items-center justify-center gap-1 rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-2 text-xs font-medium text-slate-200 transition hover:border-indigo-500/50 hover:text-white sm:flex-initial sm:py-1"
-                          >
-                            {copiedToken.value === inviteToken ? (
-                              <>
-                                <Check class="h-3 w-3 text-emerald-400" />
-                                Invite
-                              </>
-                            ) : (
-                              <>
-                                <Link2 class="h-3 w-3 text-indigo-400" />
-                                Invite
-                              </>
-                            )}
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() =>
-                              void triggerCopy(
-                                manifestToken,
-                                buildManifestUrl(effectivePublicUrl, user.api_key),
-                              )
-                            }
-                            title="Copy Stremio manifest URL"
-                            class="inline-flex flex-1 items-center justify-center gap-1 rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-600 hover:text-white sm:flex-initial sm:py-1"
-                          >
-                            {copiedToken.value === manifestToken ? (
-                              <>
-                                <Check class="h-3 w-3 text-emerald-400" />
-                                Manifest
-                              </>
-                            ) : (
-                              <>
-                                <ClipboardCopy class="h-3 w-3 text-slate-400" />
-                                Manifest
-                              </>
-                            )}
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => void triggerCopy(keyToken, user.api_key)}
-                            title="Copy raw API key"
-                            class="inline-flex items-center justify-center gap-1 rounded-lg border border-slate-700 bg-slate-800/80 p-2 text-xs font-medium text-slate-300 transition hover:border-slate-600 hover:text-white sm:px-2 sm:py-1"
-                          >
-                            {copiedToken.value === keyToken ? (
-                              <Check class="h-3.5 w-3.5 text-emerald-400 sm:h-3 sm:w-3" />
-                            ) : (
-                              <KeyRound class="h-3.5 w-3.5 text-slate-400 sm:h-3 sm:w-3" />
-                            )}
-                          </button>
-
-                          {confirming ? (
-                            <div class="inline-flex items-center gap-1">
-                              <button
-                                type="button"
-                                disabled={deleting}
-                                onClick={() => void handleDeleteUser(user.api_key)}
-                                class="rounded-lg bg-rose-600 px-2.5 py-2 text-xs font-semibold text-white transition hover:bg-rose-500 disabled:opacity-60 sm:py-1"
-                              >
-                                {deleting ? "Deleting..." : "Confirm"}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  confirmDeleteUserKey.value = null;
-                                }}
-                                class="rounded-lg border border-slate-700 px-2.5 py-2 text-xs text-slate-300 hover:bg-slate-800 sm:px-2 sm:py-1"
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                confirmDeleteUserKey.value = user.api_key;
-                              }}
-                              title="Revoke user"
-                              class="rounded-lg border border-rose-500/30 bg-rose-500/10 p-2 text-rose-300 transition hover:bg-rose-500/20 sm:p-1.5"
-                            >
-                              <Trash2 class="h-3.5 w-3.5" />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
+                {users.map((user) => (
+                  <AdminUserRow
+                    key={user.api_key}
+                    user={user}
+                    effectivePublicUrl={effectivePublicUrl}
+                    revealed={Boolean(revealedKeys.value[user.api_key])}
+                    copiedToken={copiedToken.value}
+                    confirmingDelete={confirmDeleteUserKey.value === user.api_key}
+                    deleting={deletingUserKey.value === user.api_key}
+                    onToggleReveal={() => toggleRevealKey(user.api_key)}
+                    onCopy={(token, value) => void triggerCopy(token, value)}
+                    onRequestDelete={() => {
+                      confirmDeleteUserKey.value = user.api_key;
+                    }}
+                    onConfirmDelete={() => void handleDeleteUser(user.api_key)}
+                    onCancelDelete={() => {
+                      confirmDeleteUserKey.value = null;
+                    }}
+                  />
+                ))}
               </tbody>
             </table>
           </div>
