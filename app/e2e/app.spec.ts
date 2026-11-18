@@ -9,7 +9,7 @@ test.describe.serial("Mini Media Server E2E", () => {
     await expect(page.getByText("Mini Media Server", { exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Connect Your Media Client" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Stremio", exact: true })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Fusion — Media Center" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Nuvio", exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Harbor" })).toBeVisible();
 
     const keyInput = page.locator("#api-key-input");
@@ -34,12 +34,17 @@ test.describe.serial("Mini Media Server E2E", () => {
     await page.getByRole("button", { name: "Sign In" }).click();
     await expect(page.getByText("Invalid password")).toBeVisible();
 
-    // Valid password logs into dashboard
+    // Valid password logs into dashboard overview
     await page.locator("#admin-password").fill("test-admin-pass");
     await page.getByRole("button", { name: "Sign In" }).click();
 
-    await expect(page.getByRole("heading", { name: "Users & Invite Links" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Torrents & Storage Manager" })).toBeVisible();
     await expect(page.getByText("7 Days")).toBeVisible();
+
+    // Navigate to dedicated Users page
+    await page.getByRole("link", { name: /Users/i }).first().click();
+    await expect(page).toHaveURL(/\/admin\/users$/);
+    await expect(page.getByRole("heading", { name: "Users & Invite Links" })).toBeVisible();
 
     // Create user alice
     await page.getByPlaceholder("New username...").fill("alice");
@@ -236,7 +241,7 @@ test.describe.serial("Mini Media Server E2E", () => {
     await page.goto("/admin");
     await page.locator("#admin-password").fill("test-admin-pass");
     await page.getByRole("button", { name: "Sign In" }).click();
-    await expect(page.getByRole("heading", { name: "Users & Invite Links" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Torrents & Storage Manager" })).toBeVisible();
 
     // Change password
     await page.getByRole("button", { name: "Password" }).click();
@@ -259,6 +264,10 @@ test.describe.serial("Mini Media Server E2E", () => {
 
     await page.locator("#admin-password").fill("new-secret-pass");
     await page.getByRole("button", { name: "Sign In" }).click();
+    await expect(page.getByRole("heading", { name: "Torrents & Storage Manager" })).toBeVisible();
+
+    // Direct navigation to /admin/users works and loads the Users page
+    await page.goto("/admin/users");
     await expect(page.getByRole("heading", { name: "Users & Invite Links" })).toBeVisible();
 
     // 2-step delete alice
@@ -404,29 +413,20 @@ test.describe.serial("Mini Media Server E2E", () => {
     await page.locator("#admin-password").fill("new-secret-pass");
     await page.getByRole("button", { name: "Sign In" }).click();
 
-    await expect(page.getByRole("heading", { name: "Users & Invite Links" })).toBeVisible();
-    const userRow = page.locator("tbody tr", { hasText: "mobileuser" });
-    await expect(userRow).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Torrents & Storage Manager" })).toBeVisible();
 
-    const adminOverflow = await page.evaluate(() => ({
+    const adminOverviewOverflow = await page.evaluate(() => ({
       docOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
       headerOverflow:
         (document.querySelector("header")?.scrollWidth ?? 0) > window.innerWidth ||
         (document.querySelector("header")?.getBoundingClientRect().right ?? 0) > window.innerWidth,
       mainOverflow: (document.querySelector("main")?.scrollWidth ?? 0) > window.innerWidth,
-      tableOverflow: (document.querySelector("table")?.scrollWidth ?? 0) > window.innerWidth,
     }));
-    expect(adminOverflow).toEqual({
+    expect(adminOverviewOverflow).toEqual({
       docOverflow: false,
       headerOverflow: false,
       mainOverflow: false,
-      tableOverflow: false,
     });
-
-    // Reveal/hide user API key in mobile card layout
-    await userRow.getByTitle("Reveal key").click();
-    await expect(userRow.locator("code")).toContainText(mobileKey);
-    await userRow.getByTitle("Hide key").click();
 
     // Filter tabs work on mobile
     await page.getByRole("button", { name: "Downloading", exact: true }).click();
@@ -448,6 +448,34 @@ test.describe.serial("Mini Media Server E2E", () => {
     await torrentCard.getByRole("button", { name: "Delete" }).click();
     await torrentCard.getByRole("button", { name: "Confirm Delete" }).click();
     await expect(page.getByText("Another.Release.1080p.WEB-DL.x265.mkv")).toBeHidden();
+
+    // Navigate to dedicated Users page on mobile
+    await page.getByRole("link", { name: /Users/i }).first().click();
+    await expect(page).toHaveURL(/\/admin\/users$/);
+    await expect(page.getByRole("heading", { name: "Users & Invite Links" })).toBeVisible();
+
+    const userRow = page.locator("tbody tr", { hasText: "mobileuser" });
+    await expect(userRow).toBeVisible();
+
+    const usersPageOverflow = await page.evaluate(() => ({
+      docOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+      headerOverflow:
+        (document.querySelector("header")?.scrollWidth ?? 0) > window.innerWidth ||
+        (document.querySelector("header")?.getBoundingClientRect().right ?? 0) > window.innerWidth,
+      mainOverflow: (document.querySelector("main")?.scrollWidth ?? 0) > window.innerWidth,
+      tableOverflow: (document.querySelector("table")?.scrollWidth ?? 0) > window.innerWidth,
+    }));
+    expect(usersPageOverflow).toEqual({
+      docOverflow: false,
+      headerOverflow: false,
+      mainOverflow: false,
+      tableOverflow: false,
+    });
+
+    // Reveal/hide user API key in mobile card layout
+    await userRow.getByTitle("Reveal key").click();
+    await expect(userRow.locator("code")).toContainText(mobileKey);
+    await userRow.getByTitle("Hide key").click();
 
     await page.unroute("**/api/admin/overview");
     await page.unroute("**/api/admin/torrents/*");
