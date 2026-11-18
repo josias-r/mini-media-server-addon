@@ -10,13 +10,54 @@ pub mod trigger;
 use crate::config::Config;
 use crate::qbittorrent::QbitClient;
 use axum::Router;
+use axum::extract::Request;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use reqwest::Client;
+use std::collections::HashSet;
 use std::sync::Arc;
+use tokio::sync::RwLock;
+use tower::ServiceExt;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaceholderVideo {
+    DownloadStarted,
+    FetchingMetadata,
+    EpisodeRequested,
+    Buffering,
+    Stalled,
+}
+
+impl PlaceholderVideo {
+    /// Returns the filesystem path of the baked placeholder MP4 for this state.
+    pub fn file_path(self) -> &'static str {
+        match self {
+            Self::DownloadStarted => "placeholders/download_started.mp4",
+            Self::FetchingMetadata => "placeholders/fetching_metadata.mp4",
+            Self::EpisodeRequested => "placeholders/episode_requested.mp4",
+            Self::Buffering => "placeholders/buffering.mp4",
+            Self::Stalled => "placeholders/stalled.mp4",
+        }
+    }
+
+    /// Serves the state-specific placeholder MP4 (falling back to `placeholder.mp4` if missing).
+    pub async fn serve(self, req: Request) -> Response {
+        let path = std::path::Path::new(self.file_path());
+        let target = if path.exists() {
+            path
+        } else {
+            std::path::Path::new("placeholder.mp4")
+        };
+        ServeFile::new(target)
+            .oneshot(req)
+            .await
+            .unwrap()
+            .into_response()
+    }
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -25,6 +66,7 @@ pub struct AppState {
     pub http_client: Client,
     pub db: Arc<crate::db::DbClient>,
     pub admin_session_token: String,
+    pub triggered_torrents: Arc<RwLock<HashSet<String>>>,
 }
 
 pub fn require_valid_api_key(state: &AppState, api_key: &str) -> Option<Response> {
