@@ -12,12 +12,33 @@ pub async fn manifest(State(state): State<AppState>, Path(api_key): Path<String>
 
     Json(json!({
         "id": "mini-media-server.addon",
-        "version": "1.0.0",
+        "version": env!("CARGO_PKG_VERSION"),
         "name": "Mini Media Server",
         "description": "A tiny Stremio addon acting similar to a self-hostable debrid service.",
-        "resources": ["stream"],
+        "resources": ["catalog", "stream"],
         "types": ["movie", "series"],
-        "catalogs": []
+        "catalogs": [
+            {
+                "type": "movie",
+                "id": "mms_user_movies",
+                "name": "My History"
+            },
+            {
+                "type": "series",
+                "id": "mms_user_series",
+                "name": "My History"
+            },
+            {
+                "type": "movie",
+                "id": "mms_community_movies",
+                "name": "Community"
+            },
+            {
+                "type": "series",
+                "id": "mms_community_series",
+                "name": "Community"
+            }
+        ]
     }))
     .into_response()
 }

@@ -319,19 +319,13 @@ impl DbClient {
         info_hash: &str,
     ) -> Result<()> {
         let info_hash = info_hash.trim().to_lowercase();
-        let conn = self.conn.lock().unwrap();
 
         if !info_hash.is_empty() && info_hash != "unknown" {
-            conn.execute(
-                "INSERT INTO watch_history (api_key, item_id, item_type, last_watched_at)
-                 VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-                 ON CONFLICT(api_key, item_id)
-                 DO UPDATE SET last_watched_at = CURRENT_TIMESTAMP",
-                params![api_key, &info_hash, "torrent"],
-            )?;
+            self.update_watch_history(api_key, &info_hash, "torrent")?;
         }
 
         if let Some((norm_stremio_id, imdb_id, media_type)) = parse_stremio_media_id(stremio_id) {
+            let conn = self.conn.lock().unwrap();
             conn.execute(
                 "INSERT INTO media_watch_history (
                     api_key, stremio_id, imdb_id, media_type, info_hash, last_watched_at, watch_seq
