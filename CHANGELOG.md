@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.0](https://github.com/josias-r/mini-media-server-addon/compare/v0.1.4...v0.2.0) (2026-11-18)
+
+
+### Features
+
+* **catalog:** add user and community stremio catalog endpoints ([92636e3](https://github.com/josias-r/mini-media-server-addon/commit/92636e32cb9808eece561cd0f471e2518ab4c9c5))
+* **db:** track media watch history and cache cinemeta metadata ([bf5ae8a](https://github.com/josias-r/mini-media-server-addon/commit/bf5ae8a7c2c76d197423c23da221283d9a1f6679))
+* **placeholders:** add state-specific placeholder mp4 videos ([e847093](https://github.com/josias-r/mini-media-server-addon/commit/e847093f53f90390a4b83e68bc4b720e9a101091))
+* **qbit:** tag torrents with media type and requested episode ids ([d5ad00d](https://github.com/josias-r/mini-media-server-addon/commit/d5ad00d0684047ed330b1a1306ddf96ecd1b086f))
+* **stream:** serve immediate state-specific placeholders with stream readiness threshold ([90bb892](https://github.com/josias-r/mini-media-server-addon/commit/90bb8927895ca61565a208f7fafeb13c760ce9c6))
+
 ## [0.1.4](https://github.com/josias-r/mini-media-server-addon/compare/v0.1.3...v0.1.4) (2026-11-18)
 
 
