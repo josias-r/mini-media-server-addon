@@ -3,5 +3,13 @@
 @layer base {
   html {
     color-scheme: dark;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  button,
+  a,
+  input,
+  select {
+    touch-action: manipulation;
   }
 }
