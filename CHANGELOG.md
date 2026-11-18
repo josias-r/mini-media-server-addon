@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.3](https://github.com/josias-r/mini-media-server-addon/compare/v0.1.2...v0.1.3) (2026-11-18)
+
+
+### Bug Fixes
+
+* enhance onboarding UX flow ([c967713](https://github.com/josias-r/mini-media-server-addon/commit/c9677133c7dba9c896fc4d411e3d731cb9e7e9e8))
+* step-by-step user instructions ([c8a8302](https://github.com/josias-r/mini-media-server-addon/commit/c8a830219823edabcae4c370935f7c4f32dd3108))
+
 ## [0.1.2](https://github.com/josias-r/mini-media-server-addon/compare/v0.1.1...v0.1.2) (2026-11-18)
 
 
