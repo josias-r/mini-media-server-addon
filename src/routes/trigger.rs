@@ -1,14 +1,13 @@
-use super::{AppState, require_valid_api_key};
+use super::{AppState, PlaceholderVideo, require_valid_api_key};
+use crate::jackett::extract_btih_hex;
 use crate::matcher::find_best_file_match;
 use crate::stream_builder::get_series_params;
 use axum::{
     extract::{Path, Query, Request, State},
-    response::{IntoResponse, Response},
+    response::Response,
 };
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
-use tower::ServiceExt;
-use tower_http::services::ServeFile;
 
 fn normalize_valid_hash(hash: &str) -> Option<String> {
     let trimmed = hash.trim();
@@ -17,6 +16,21 @@ fn normalize_valid_hash(hash: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+fn build_trigger_key(
+    valid_initial_hash: Option<&str>,
+    magnet_opt: Option<&str>,
+    stremio_id: &str,
+    info_hash: &str,
+) -> String {
+    if let Some(h) = valid_initial_hash {
+        return h.to_string();
+    }
+    if let Some(magnet) = magnet_opt {
+        return extract_btih_hex(magnet).unwrap_or_else(|| format!("{}:{}", stremio_id, magnet));
+    }
+    format!("{}:{}", stremio_id, info_hash)
 }
 
 pub async fn trigger_download(
@@ -34,11 +48,24 @@ pub async fn trigger_download(
         let _ = state.db.update_watch_history(&api_key, h, "torrent");
     }
 
-    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    let magnet_opt = params.get("magnet").cloned();
+    let trigger_key = build_trigger_key(
+        valid_initial_hash.as_deref(),
+        magnet_opt.as_deref(),
+        &stremio_id,
+        &info_hash,
+    );
+    let already_existing = params.get("existing").is_some_and(|v| v == "1");
+    let newly_inserted = state.triggered_torrents.write().await.insert(trigger_key);
+    let placeholder = if already_existing || !newly_inserted {
+        PlaceholderVideo::FetchingMetadata
+    } else {
+        PlaceholderVideo::DownloadStarted
+    };
+
     let task_state = state.clone();
     let task_api_key = api_key.clone();
     let task_stremio_id = stremio_id.clone();
-    let magnet_opt = params.get("magnet").cloned();
     let initial_hash_clone = valid_initial_hash.clone();
 
     tokio::spawn(async move {
@@ -96,6 +123,12 @@ pub async fn trigger_download(
         }
 
         if let Some(ref h) = target_hash {
+            task_state
+                .triggered_torrents
+                .write()
+                .await
+                .insert(h.clone());
+
             if initial_hash_clone.is_none() {
                 let _ = task_state
                     .db
@@ -133,7 +166,7 @@ pub async fn trigger_download(
                     task_state.qbit.resume_torrent(h).await;
                 }
             } else {
-                log::debug!("Fallbacking to placeholder for {}", h);
+                log::debug!("Metadata still unavailable after background poll for {}", h);
             }
         } else {
             log::warn!(
@@ -141,15 +174,50 @@ pub async fn trigger_download(
                 task_stremio_id
             );
         }
-
-        let _ = tx.send(());
     });
 
-    // Wait briefly so fast .torrent / cached metadata torrents have priorities applied before
-    // returning placeholder.mp4, while slower magnet metadata fetches continue in the background.
-    let _ = tokio::time::timeout(Duration::from_secs(12), rx).await;
+    placeholder.serve(req).await
+}
 
-    let placeholder = ServeFile::new(std::path::Path::new("placeholder.mp4"));
-    // Stremio will play this placeholder and the user can check back later when it's ready.
-    placeholder.oneshot(req).await.unwrap().into_response()
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trigger_key_prefers_valid_hash_then_magnet_btih_then_fallback() {
+        assert_eq!(
+            build_trigger_key(
+                Some("0123456789abcdef0123456789abcdef01234567"),
+                Some("magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                "tt123",
+                "0123456789abcdef0123456789abcdef01234567"
+            ),
+            "0123456789abcdef0123456789abcdef01234567"
+        );
+
+        assert_eq!(
+            build_trigger_key(
+                None,
+                Some("magnet:?xt=urn:btih:BA0B39DE2C19CEADCFB1B441D8B6D668E57458EF&dn=Test"),
+                "tt123",
+                "unknown"
+            ),
+            "ba0b39de2c19ceadcfb1b441d8b6d668e57458ef"
+        );
+
+        assert_eq!(
+            build_trigger_key(
+                None,
+                Some("https://jackett.local/dl/123"),
+                "tt123:1:2",
+                "unknown"
+            ),
+            "tt123:1:2:https://jackett.local/dl/123"
+        );
+
+        assert_eq!(
+            build_trigger_key(None, None, "tt123", "unknown"),
+            "tt123:unknown"
+        );
+    }
 }

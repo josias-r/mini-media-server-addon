@@ -112,18 +112,25 @@ pub async fn build_stream_response(
                     format!("{}\n📥 {}% | 💾 {:.2} GB", file.name, progress_pct, size_gb)
                 };
 
+                let unrequested_param = if file.priority == 0 {
+                    "&unrequested=1"
+                } else {
+                    ""
+                };
+
                 stream_items.push(StreamItem {
                     stream: Stream {
                         name: Some(name_str.to_string()),
                         title: Some(title_str),
                         url: Some(format!(
-                            "{}/{}/play-file/{}/{}?fileIdx={}&filePath={}",
+                            "{}/{}/play-file/{}/{}?fileIdx={}&filePath={}{}",
                             state.config.public_url,
                             api_key,
                             urlencoding::encode(stremio_id),
                             torrent.hash,
                             file.index.unwrap_or(idx),
-                            urlencoding::encode(&file.name)
+                            urlencoding::encode(&file.name),
+                            unrequested_param
                         )),
                         description: None,
                         yt_id: None,
@@ -155,6 +162,7 @@ pub async fn build_stream_response(
         } else {
             ""
         };
+        let existing_param = if is_downloading { "&existing=1" } else { "" };
         let size_gb = r.size as f64 / 1024.0 / 1024.0 / 1024.0;
 
         stream_items.push(StreamItem {
@@ -165,12 +173,13 @@ pub async fn build_stream_response(
                     prefix, r.title, r.seeders, size_gb
                 )),
                 url: Some(format!(
-                    "{}/{}/trigger-download/{}/{}?magnet={}",
+                    "{}/{}/trigger-download/{}/{}?magnet={}{}",
                     state.config.public_url,
                     api_key,
                     urlencoding::encode(stremio_id),
                     info_hash,
-                    urlencoding::encode(&magnet_or_url.unwrap())
+                    urlencoding::encode(&magnet_or_url.unwrap()),
+                    existing_param
                 )),
                 description: None,
                 yt_id: None,

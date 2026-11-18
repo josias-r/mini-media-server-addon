@@ -1,4 +1,4 @@
-use super::{AppState, require_valid_api_key};
+use super::{AppState, PlaceholderVideo, require_valid_api_key};
 use axum::http::StatusCode;
 use axum::http::header::RANGE;
 use axum::{
@@ -10,7 +10,7 @@ use std::path::{Component, Path as StdPath, PathBuf};
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
 
-fn resolve_safe_download_path(download_root: &str, relative: &str) -> Option<PathBuf> {
+pub(crate) fn resolve_safe_download_path(download_root: &str, relative: &str) -> Option<PathBuf> {
     if relative.is_empty() {
         return None;
     }
@@ -58,8 +58,15 @@ pub async fn stream_file(
         file_path
     );
 
-    if !full_path.exists() {
-        log::warn!("File does not exist (yet): {:?}", full_path);
+    let has_bytes = std::fs::metadata(&full_path)
+        .map(|m| m.is_file() && m.len() > 0)
+        .unwrap_or(false);
+    if !has_bytes {
+        log::warn!(
+            "File does not exist or is empty on disk (yet): {:?}; serving buffering placeholder",
+            full_path
+        );
+        return PlaceholderVideo::Buffering.serve(req).await;
     }
 
     let range_header = req

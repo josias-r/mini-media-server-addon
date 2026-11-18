@@ -12,7 +12,9 @@ mod worker;
 
 use log::info;
 use reqwest::Client;
+use std::collections::HashSet;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 #[tokio::main]
 async fn main() {
@@ -38,6 +40,7 @@ async fn main() {
         http_client: Client::builder().build().unwrap(),
         db: Arc::new(db),
         admin_session_token: uuid::Uuid::new_v4().to_string(),
+        triggered_torrents: Arc::new(RwLock::new(HashSet::new())),
     };
 
     // Spawn background retention worker

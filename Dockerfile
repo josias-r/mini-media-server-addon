@@ -29,10 +29,11 @@ WORKDIR /app
 # Install ca-certificates for reqwest to make HTTPS requests
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 
-# Copy the compiled binary, static frontend assets, and placeholder video
+# Copy the compiled binary, static frontend assets, and placeholder videos
 COPY --from=builder /app/target/release/mini-media-server-addon /app/mini-media-server-addon
 COPY --from=frontend-builder /app/app/dist /app/app/dist
 COPY placeholder.mp4 /app/placeholder.mp4
+COPY placeholders /app/placeholders
 
 # Environment variables
 ENV PORT=7000
