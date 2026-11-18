@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.2](https://github.com/josias-r/mini-media-server-addon/compare/v0.1.1...v0.1.2) (2026-11-18)
+
+
+### Bug Fixes
+
+* improve UI on mobile ([bde6105](https://github.com/josias-r/mini-media-server-addon/commit/bde6105cfee26715ea45aae391d12b4bb7932541))
+* move user admin section to its own page ([d574e61](https://github.com/josias-r/mini-media-server-addon/commit/d574e6151c37d0dfb7e9bbae77c74b4341a6d155))
+* update client compatibility details ([29a7369](https://github.com/josias-r/mini-media-server-addon/commit/29a7369619256c52aa68ff3411dafadfc04de757))
+
 ## [0.1.1](https://github.com/josias-r/mini-media-server-addon/compare/v0.1.0...v0.1.1) (2026-11-13)
 
 
