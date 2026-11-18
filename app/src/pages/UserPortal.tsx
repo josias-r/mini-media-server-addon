@@ -49,12 +49,12 @@ const CLIENTS = [
     cta: "Download Stremio",
   },
   {
-    name: "Fusion — Media Center",
-    platforms: "iOS • iPadOS • Apple TV",
+    name: "Nuvio",
+    platforms: "Android • Android TV • macOS • Windows • Samsung TV • LG TV",
     description:
-      "A sleek third-party Stremio-compatible media center tailored for Apple devices with Apple TV support.",
-    url: "https://apps.apple.com/us/app/fusion-media-center/id6759285919",
-    cta: "View on App Store",
+      "A modern cross-platform Stremio-compatible media center for mobile, desktop, and smart TVs.",
+    url: "https://nuvio.tv/",
+    cta: "Visit Nuvio",
   },
   {
     name: "Harbor",
