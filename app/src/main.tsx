@@ -25,7 +25,11 @@ function App() {
   }
 
   const isAdmin = pathname.value.startsWith("/admin");
-  return isAdmin ? <AdminDashboard onNavigate={navigate} /> : <UserPortal onNavigate={navigate} />;
+  return isAdmin ? (
+    <AdminDashboard pathname={pathname.value} onNavigate={navigate} />
+  ) : (
+    <UserPortal onNavigate={navigate} />
+  );
 }
 
 const root = document.getElementById("app");

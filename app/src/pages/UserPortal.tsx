@@ -49,12 +49,12 @@ const CLIENTS = [
     cta: "Download Stremio",
   },
   {
-    name: "Fusion — Media Center",
-    platforms: "iOS • iPadOS • Apple TV",
+    name: "Nuvio",
+    platforms: "Android • Android TV • macOS • Windows • Samsung TV • LG TV",
     description:
-      "A sleek third-party Stremio-compatible media center tailored for Apple devices with Apple TV support.",
-    url: "https://apps.apple.com/us/app/fusion-media-center/id6759285919",
-    cta: "View on App Store",
+      "A modern cross-platform Stremio-compatible media center for mobile, desktop, and smart TVs.",
+    url: "https://nuvio.tv/",
+    cta: "Visit Nuvio",
   },
   {
     name: "Harbor",
@@ -190,32 +190,32 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
     <div class="relative min-h-screen overflow-x-hidden">
       <div class="pointer-events-none fixed inset-0 -z-10 bg-[radial-gradient(ellipse_at_top,_rgba(99,102,241,0.16),transparent_55%)]" />
 
-      <header class="border-b border-slate-800/80 bg-slate-950/70 backdrop-blur-md">
-        <div class="mx-auto flex max-w-5xl items-center justify-between px-4 py-4 sm:px-6">
-          <div class="flex items-center gap-3">
-            <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 shadow-lg shadow-indigo-500/25">
+      <header class="sticky top-0 z-20 border-b border-slate-800/80 bg-slate-950/85 backdrop-blur-md">
+        <div class="mx-auto flex max-w-5xl items-center justify-between gap-2.5 px-3.5 py-3 sm:gap-3 sm:px-6 sm:py-4">
+          <div class="flex min-w-0 items-center gap-2.5 sm:gap-3">
+            <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 shadow-lg shadow-indigo-500/25">
               <Film class="h-5 w-5 text-white" />
             </div>
-            <div>
-              <div class="flex items-center gap-2">
-                <span class="text-base font-semibold tracking-tight text-white">
+            <div class="min-w-0">
+              <div class="flex min-w-0 items-center gap-2">
+                <span class="truncate text-base font-semibold tracking-tight text-white">
                   Mini Media Server
                 </span>
                 {info.value?.version && (
-                  <span class="rounded-md border border-slate-800 bg-slate-900 px-1.5 py-0.5 font-mono text-[11px] text-slate-400">
+                  <span class="shrink-0 rounded-md border border-slate-800 bg-slate-900 px-1.5 py-0.5 font-mono text-[11px] text-slate-400">
                     v{info.value.version}
                   </span>
                 )}
               </div>
-              <p class="text-xs text-slate-400">Self-hosted Stremio Addon</p>
+              <p class="truncate text-xs text-slate-400">Self-hosted Stremio Addon</p>
             </div>
           </div>
 
-          <div class="flex items-center gap-2.5">
+          <div class="flex shrink-0 items-center gap-2.5">
             {info.value && info.value.retention_days > 0 && (
-              <Badge tone="slate" className="hidden sm:inline-flex">
-                Retention: {info.value.retention_days}d
-              </Badge>
+              <span class="hidden sm:inline-flex">
+                <Badge tone="slate">Retention: {info.value.retention_days}d</Badge>
+              </span>
             )}
             <a
               href="/admin"
@@ -223,7 +223,7 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
                 e.preventDefault();
                 onNavigate("/admin");
               }}
-              class="inline-flex items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-900/90 px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:border-slate-700 hover:bg-slate-800 hover:text-white"
+              class="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-900/90 px-3 py-1.5 text-xs font-medium whitespace-nowrap text-slate-300 transition hover:border-slate-700 hover:bg-slate-800 hover:text-white"
             >
               <ShieldCheck class="h-3.5 w-3.5 text-indigo-400" />
               Admin Panel
@@ -232,15 +232,22 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
         </div>
       </header>
 
-      <main class="mx-auto max-w-5xl space-y-10 px-4 py-10 sm:px-6">
+      <main class="mx-auto max-w-5xl space-y-6 px-3.5 py-6 pb-12 sm:space-y-10 sm:px-6 sm:py-10">
         {/* Hero & Quick Connect */}
-        <section class="space-y-6">
-          <div class="text-center sm:text-left">
-            <Badge tone="indigo" className="mb-3">
-              <Sparkles class="h-3 w-3" />
-              Debrid-style self-hosted streaming
-            </Badge>
-            <h1 class="bg-gradient-to-r from-white via-slate-100 to-indigo-200 bg-clip-text text-3xl font-bold tracking-tight text-transparent sm:text-4xl">
+        <section class="space-y-5 sm:space-y-6">
+          <div class="text-left">
+            <div class="mb-3 flex flex-wrap items-center gap-2">
+              <Badge tone="indigo">
+                <Sparkles class="h-3 w-3" />
+                Debrid-style self-hosted streaming
+              </Badge>
+              {info.value && info.value.retention_days > 0 && (
+                <span class="inline-flex sm:hidden">
+                  <Badge tone="slate">Retention: {info.value.retention_days}d</Badge>
+                </span>
+              )}
+            </div>
+            <h1 class="bg-gradient-to-r from-white via-slate-100 to-indigo-200 bg-clip-text text-2xl font-bold tracking-tight text-transparent sm:text-4xl">
               Connect Your Media Client
             </h1>
             <p class="mt-2 max-w-2xl text-sm leading-relaxed text-slate-400 sm:text-base">
@@ -249,8 +256,8 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
             </p>
           </div>
 
-          <div class="rounded-2xl border border-slate-800 bg-slate-900/75 p-5 shadow-2xl shadow-black/40 backdrop-blur-sm sm:p-7">
-            <div class="flex flex-wrap items-center justify-between gap-3">
+          <div class="rounded-2xl border border-slate-800 bg-slate-900/75 p-4 shadow-2xl shadow-black/40 backdrop-blur-sm sm:p-7">
+            <div class="flex flex-wrap items-center justify-between gap-2.5 sm:gap-3">
               <label
                 for="api-key-input"
                 class="flex items-center gap-2 text-sm font-medium text-slate-200"
@@ -259,7 +266,7 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
                 Your API Key
               </label>
 
-              <div class="flex items-center gap-2">
+              <div class="flex flex-wrap items-center gap-2">
                 {verifying.value && (
                   <Badge tone="slate">
                     <Loader2 class="h-3 w-3 animate-spin" />
@@ -296,15 +303,15 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
                 placeholder="Paste your API key (e.g. 550e8400-e29b-41d4-a716-446655440000)"
                 autocomplete="off"
                 spellcheck={false}
-                class="w-full rounded-xl border border-slate-700/80 bg-slate-950/90 py-3 pr-20 pl-4 font-mono text-sm text-slate-100 placeholder-slate-500 transition outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                class="w-full rounded-xl border border-slate-700/80 bg-slate-950/90 py-3 pr-20 pl-3.5 font-mono text-base text-slate-100 placeholder-slate-500 transition outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 sm:pl-4 sm:text-sm"
               />
-              <div class="absolute inset-y-0 right-2 flex items-center gap-1">
+              <div class="absolute inset-y-0 right-1.5 flex items-center gap-0.5">
                 {apiKey.value && (
                   <button
                     type="button"
                     onClick={handleClearKey}
                     title="Clear saved key"
-                    class="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-800 hover:text-slate-200"
+                    class="flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-800 hover:text-slate-200"
                   >
                     <X class="h-4 w-4" />
                   </button>
@@ -315,7 +322,7 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
                     showKey.value = !showKey.value;
                   }}
                   title={showKey.value ? "Hide API key" : "Show API key"}
-                  class="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-800 hover:text-slate-200"
+                  class="flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-800 hover:text-slate-200"
                 >
                   {showKey.value ? <EyeOff class="h-4 w-4" /> : <Eye class="h-4 w-4" />}
                 </button>
@@ -323,8 +330,8 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
             </div>
 
             {/* Manifest URL Box */}
-            <div class="mt-5 rounded-xl border border-slate-800 bg-slate-950/80 p-4">
-              <div class="mb-1.5 flex items-center justify-between text-xs font-medium uppercase tracking-wider text-slate-500">
+            <div class="mt-4 rounded-xl border border-slate-800 bg-slate-950/80 p-3.5 sm:mt-5 sm:p-4">
+              <div class="mb-1.5 flex flex-wrap items-center justify-between gap-1 text-[11px] font-medium uppercase tracking-wider text-slate-500 sm:text-xs">
                 <span>Addon Manifest URL</span>
                 {isValidKey.value ? (
                   <span class="text-emerald-400">Ready to install</span>
@@ -332,17 +339,17 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
                   <span>Replace YOUR_API_KEY above</span>
                 )}
               </div>
-              <code class="block break-all font-mono text-sm text-indigo-300 sm:text-base">
+              <code class="block break-all font-mono text-xs leading-relaxed text-indigo-300 select-all sm:text-base">
                 {manifestUrl.value}
               </code>
             </div>
 
             {/* Action Buttons */}
-            <div class="mt-5 flex flex-col gap-3 sm:flex-row">
+            <div class="mt-4 flex flex-col gap-2.5 sm:mt-5 sm:flex-row sm:gap-3">
               {isValidKey.value ? (
                 <a
                   href={stremioLink.value}
-                  class="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-600/25 transition hover:bg-indigo-500 active:scale-[0.99]"
+                  class="inline-flex min-h-12 w-full flex-1 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-5 py-3.5 text-sm font-semibold text-white shadow-lg shadow-indigo-600/25 transition hover:bg-indigo-500 active:scale-[0.99] sm:w-auto sm:py-3"
                 >
                   <Play class="h-4 w-4 fill-current" />
                   1-Click Install in Stremio
@@ -351,7 +358,7 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
                 <button
                   type="button"
                   disabled
-                  class="inline-flex flex-1 cursor-not-allowed items-center justify-center gap-2 rounded-xl border border-slate-800 bg-slate-800/50 px-5 py-3 text-sm font-semibold text-slate-500"
+                  class="inline-flex min-h-12 w-full flex-1 cursor-not-allowed items-center justify-center gap-2 rounded-xl border border-slate-800 bg-slate-800/50 px-5 py-3.5 text-sm font-semibold text-slate-500 sm:w-auto sm:py-3"
                 >
                   <Play class="h-4 w-4" />
                   Enter Valid Key for 1-Click Install
@@ -361,7 +368,7 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
               <button
                 type="button"
                 onClick={handleCopyManifest}
-                class={`inline-flex items-center justify-center gap-2 rounded-xl border px-5 py-3 text-sm font-semibold transition active:scale-[0.99] ${
+                class={`inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border px-5 py-3.5 text-sm font-semibold transition active:scale-[0.99] sm:w-auto sm:py-3 ${
                   copied.value
                     ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
                     : "border-slate-700 bg-slate-800 text-slate-100 hover:border-slate-600 hover:bg-slate-700/80"
@@ -385,18 +392,18 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
 
         {/* User's Recent Streams & Active Downloads */}
         {isValidKey.value && verification.value && (
-          <section class="space-y-4">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2.5">
-                <Download class="h-5 w-5 text-indigo-400" />
-                <h2 class="text-lg font-semibold text-white">
+          <section class="space-y-3.5 sm:space-y-4">
+            <div class="flex items-center justify-between gap-3">
+              <div class="flex min-w-0 items-center gap-2.5">
+                <Download class="h-5 w-5 shrink-0 text-indigo-400" />
+                <h2 class="text-base font-semibold leading-snug text-white sm:text-lg">
                   My Active Downloads & Recent Streams
                 </h2>
               </div>
               <button
                 type="button"
                 onClick={() => void runVerify(apiKey.value)}
-                class="inline-flex items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:border-slate-700 hover:text-white"
+                class="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:border-slate-700 hover:text-white"
               >
                 <RefreshCw class={`h-3.5 w-3.5 ${verifying.value ? "animate-spin" : ""}`} />
                 Refresh
@@ -404,7 +411,7 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
             </div>
 
             {verification.value.active_torrents.length === 0 ? (
-              <div class="rounded-2xl border border-dashed border-slate-800 bg-slate-900/40 p-8 text-center">
+              <div class="rounded-2xl border border-dashed border-slate-800 bg-slate-900/40 p-6 text-center sm:p-8">
                 <p class="text-sm text-slate-400">
                   No recent streams yet. Pick any movie or episode inside Stremio and your downloads
                   will appear here in real time.
@@ -420,17 +427,17 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
                   return (
                     <div
                       key={torrent.hash}
-                      class="rounded-xl border border-slate-800 bg-slate-900/70 p-4 transition hover:border-slate-700"
+                      class="rounded-xl border border-slate-800 bg-slate-900/70 p-3.5 transition hover:border-slate-700 sm:p-4"
                     >
                       <div class="flex flex-wrap items-start justify-between gap-2">
                         <div class="min-w-0 flex-1">
                           <p
-                            class="truncate text-sm font-medium text-slate-100"
+                            class="line-clamp-2 break-all text-sm font-medium text-slate-100 sm:truncate"
                             title={torrent.name}
                           >
                             {torrent.name}
                           </p>
-                          <div class="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-400 tabular-nums">
+                          <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400 tabular-nums sm:mt-1 sm:gap-x-4">
                             <span>{formatBytes(torrent.size)}</span>
                             {downloading && torrent.dlspeed > 0 && (
                               <span class="text-indigo-300">↓ {formatSpeed(torrent.dlspeed)}</span>
@@ -443,7 +450,7 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
                         </Badge>
                       </div>
 
-                      <div class="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
+                      <div class="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-800 sm:h-1.5">
                         <div
                           class={`h-full rounded-full transition-all duration-500 ${
                             pct >= 100 ? "bg-emerald-500" : "bg-indigo-500"
@@ -460,16 +467,16 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
         )}
 
         {/* How to Connect */}
-        <section class="rounded-2xl border border-slate-800 bg-slate-900/50 p-6">
+        <section class="rounded-2xl border border-slate-800 bg-slate-900/50 p-4 sm:p-6">
           <h2 class="text-lg font-semibold text-white">How to Connect</h2>
-          <ol class="mt-4 grid gap-3 text-sm text-slate-300 sm:grid-cols-2">
-            <li class="flex gap-3 rounded-xl border border-slate-800/80 bg-slate-950/50 p-3.5">
+          <ol class="mt-3.5 grid gap-2.5 text-sm text-slate-300 sm:mt-4 sm:grid-cols-2 sm:gap-3">
+            <li class="flex gap-3 rounded-xl border border-slate-800/80 bg-slate-950/50 p-3 sm:p-3.5">
               <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo-500/20 text-xs font-bold text-indigo-300">
                 1
               </span>
               <span>Paste your API key above (or open an invite link from your server admin).</span>
             </li>
-            <li class="flex gap-3 rounded-xl border border-slate-800/80 bg-slate-950/50 p-3.5">
+            <li class="flex gap-3 rounded-xl border border-slate-800/80 bg-slate-950/50 p-3 sm:p-3.5">
               <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo-500/20 text-xs font-bold text-indigo-300">
                 2
               </span>
@@ -478,7 +485,7 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
                 Manifest URL.
               </span>
             </li>
-            <li class="flex gap-3 rounded-xl border border-slate-800/80 bg-slate-950/50 p-3.5">
+            <li class="flex gap-3 rounded-xl border border-slate-800/80 bg-slate-950/50 p-3 sm:p-3.5">
               <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo-500/20 text-xs font-bold text-indigo-300">
                 3
               </span>
@@ -487,7 +494,7 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
                 paste the URL ending in <code class="text-indigo-300">/manifest.json</code>.
               </span>
             </li>
-            <li class="flex gap-3 rounded-xl border border-slate-800/80 bg-slate-950/50 p-3.5">
+            <li class="flex gap-3 rounded-xl border border-slate-800/80 bg-slate-950/50 p-3 sm:p-3.5">
               <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo-500/20 text-xs font-bold text-indigo-300">
                 4
               </span>
@@ -499,27 +506,29 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
         </section>
 
         {/* Compatible Clients */}
-        <section class="space-y-4">
+        <section class="space-y-3.5 sm:space-y-4">
           <div class="flex items-center gap-2.5">
-            <Tv class="h-5 w-5 text-indigo-400" />
+            <Tv class="h-5 w-5 shrink-0 text-indigo-400" />
             <h2 class="text-lg font-semibold text-white">Compatible Clients</h2>
           </div>
-          <div class="grid gap-4 sm:grid-cols-3">
+          <div class="grid gap-3 sm:grid-cols-3 sm:gap-4">
             {CLIENTS.map((client) => (
               <div
                 key={client.name}
-                class="flex flex-col justify-between rounded-2xl border border-slate-800 bg-slate-900/60 p-5 transition hover:-translate-y-0.5 hover:border-indigo-500/50"
+                class="flex flex-col justify-between rounded-2xl border border-slate-800 bg-slate-900/60 p-4 transition hover:-translate-y-0.5 hover:border-indigo-500/50 sm:p-5"
               >
                 <div>
                   <h3 class="text-base font-semibold text-white">{client.name}</h3>
                   <p class="mt-1 text-xs font-medium text-indigo-300/90">{client.platforms}</p>
-                  <p class="mt-3 text-sm leading-relaxed text-slate-400">{client.description}</p>
+                  <p class="mt-2.5 text-sm leading-relaxed text-slate-400 sm:mt-3">
+                    {client.description}
+                  </p>
                 </div>
                 <a
                   href={client.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  class="mt-5 inline-flex items-center gap-1.5 text-sm font-medium text-indigo-400 transition hover:text-indigo-300"
+                  class="mt-4 inline-flex w-full items-center justify-between rounded-xl border border-indigo-500/20 bg-indigo-500/10 px-3.5 py-2.5 text-sm font-medium text-indigo-300 transition hover:bg-indigo-500/15 sm:mt-5 sm:w-auto sm:justify-start sm:border-0 sm:bg-transparent sm:p-0 sm:text-indigo-400 sm:hover:bg-transparent sm:hover:text-indigo-300"
                 >
                   {client.cta}
                   <ExternalLink class="h-3.5 w-3.5" />

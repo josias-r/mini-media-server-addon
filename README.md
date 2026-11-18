@@ -10,7 +10,7 @@ The quickest, most seamless way to deploy your own self-hosted media server. Thi
 - **Secure Access Control:** Protect your server using generated API keys. Control exactly who has access to your media and prevent unauthorized usage.
 - **Admin Dashboard:** A lightweight, built-in admin panel to manage users, track downloaded files, and monitor viewing history in real-time.
 - **Automated Storage Management:** Intelligently tracks viewing habits, allowing you to configure automatic deletion of media files that haven't been watched recently to save disk space.
-- **Broad Client Compatibility:** Works flawlessly with any Stremio-compatible client, including the official Stremio apps, Fusion Media Center, Harbor, and more.
+- **Broad Client Compatibility:** Works flawlessly with any Stremio-compatible client, including the official Stremio apps, Nuvio, Harbor, and more.
 
 ## Getting Started
 

@@ -19,7 +19,7 @@ interface BadgeProps {
 export function Badge({ tone = "slate", children, className = "" }: BadgeProps) {
   return (
     <span
-      class={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium ${TONE_CLASSES[tone]} ${className}`}
+      class={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium whitespace-nowrap ${TONE_CLASSES[tone]} ${className}`}
     >
       {children}
     </span>
