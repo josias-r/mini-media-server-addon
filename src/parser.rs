@@ -225,6 +225,19 @@ pub fn is_definitely_not_full_season(title: &str, expected_season: u32) -> bool 
     false
 }
 
+/// Returns true if a torrent name contains explicit season or episode markers.
+pub fn looks_like_series_name(title: &str) -> bool {
+    let upper = title.to_uppercase();
+    SXX_EXX_RE.is_match(&upper)
+        || SEASON_RE.is_match(&upper)
+        || EP_RE.is_match(&upper)
+        || AX_B_RE.captures_iter(&upper).any(|caps| {
+            caps.get(1)
+                .and_then(|m| m.as_str().parse::<u32>().ok())
+                .is_some_and(|s| s < 30)
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

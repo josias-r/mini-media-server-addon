@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod api;
+pub mod catalog;
 pub mod manifest;
 pub mod movie;
 pub mod play;
@@ -84,6 +85,14 @@ pub fn create_router(state: AppState) -> Router {
 
     Router::new()
         .route("/{api_key}/manifest.json", get(manifest::manifest))
+        .route(
+            "/{api_key}/catalog/{media_type}/{catalog_id}",
+            get(catalog::catalog_handler),
+        )
+        .route(
+            "/{api_key}/catalog/{media_type}/{catalog_id}/{extra}",
+            get(catalog::catalog_with_extra_handler),
+        )
         .route("/{api_key}/stream/movie/{id}", get(movie::movie_stream))
         .route("/{api_key}/stream/series/{id}", get(series::series_stream))
         .route(

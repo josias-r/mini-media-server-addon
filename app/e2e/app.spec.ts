@@ -65,16 +65,30 @@ test.describe.serial("Mini Media Server E2E", () => {
     await expect(aliceRow.locator("code")).toContainText("••••••••••••");
 
     // Verify real Stremio manifest endpoint works for alice's API key
+    const infoRes = await request.get("/api/info");
+    expect(infoRes.status()).toBe(200);
+    const infoJson = (await infoRes.json()) as { version: string };
+
     const manifestRes = await request.get(`/${aliceApiKey}/manifest.json`);
     expect(manifestRes.status()).toBe(200);
     const manifestJson = (await manifestRes.json()) as {
       id: string;
+      version: string;
       name: string;
       resources: string[];
+      catalogs: Array<{ type: string; id: string; name: string }>;
     };
     expect(manifestJson.id).toBe("mini-media-server.addon");
+    expect(manifestJson.version).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(manifestJson.version).toBe(infoJson.version);
     expect(manifestJson.name).toBe("Mini Media Server");
-    expect(manifestJson.resources).toContain("stream");
+    expect(manifestJson.resources).toEqual(["catalog", "stream"]);
+    expect(manifestJson.catalogs).toEqual([
+      { type: "movie", id: "mms_user_movies", name: "My History" },
+      { type: "series", id: "mms_user_series", name: "My History" },
+      { type: "movie", id: "mms_community_movies", name: "Community" },
+      { type: "series", id: "mms_community_series", name: "Community" },
+    ]);
   });
 
   test("Invite link auto-configures User Portal and persists to localStorage", async ({ page }) => {
@@ -170,6 +184,112 @@ test.describe.serial("Mini Media Server E2E", () => {
     await page.getByRole("button", { name: "Show Setup Guide" }).click();
     await expect(page.getByRole("heading", { name: "Install the Addon in Stremio" })).toBeVisible();
     await expect(installLink).toBeVisible();
+  });
+
+  test("User and Community Stremio catalogs track movies and series episodes", async ({
+    request,
+  }) => {
+    expect(aliceApiKey).not.toBe("");
+
+    // Trigger and play movies + multiple episodes of a series for alice.
+    // Note: Playwright's webServer runs with cwd=app/, so placeholder.serve() may return 404
+    // after recording watch history while still executing the route handler.
+    const triggerMovie = await request.get(
+      `/${aliceApiKey}/trigger-download/tt1375666/aaaa1111bbbb2222cccc3333dddd4444eeee5555`,
+    );
+    expect([200, 404]).toContain(triggerMovie.status());
+
+    const playMovie = await request.get(
+      `/${aliceApiKey}/play-file/tt0816692/bbbb1111cccc2222dddd3333eeee4444ffff5555?fileIdx=0&filePath=Interstellar.mkv`,
+    );
+    expect([200, 404]).toContain(playMovie.status());
+
+    const seasonHash = "cccc1111dddd2222eeee3333ffff4444aaaa5555";
+    const triggerEp1 = await request.get(
+      `/${aliceApiKey}/trigger-download/tt0903747:1:1/${seasonHash}`,
+    );
+    expect([200, 404]).toContain(triggerEp1.status());
+
+    const playEp2 = await request.get(
+      `/${aliceApiKey}/play-file/tt0903747:1:2/${seasonHash}?fileIdx=1&filePath=Breaking.Bad.S01E02.mkv`,
+    );
+    expect([200, 404]).toContain(playEp2.status());
+
+    type CatalogMeta = {
+      id: string;
+      type: string;
+      name: string;
+      poster?: string;
+      releaseInfo?: string;
+      description?: string;
+    };
+
+    const userMoviesRes = await request.get(`/${aliceApiKey}/catalog/movie/mms_user_movies.json`);
+    expect(userMoviesRes.status()).toBe(200);
+    const userMovies = (await userMoviesRes.json()) as { metas: CatalogMeta[] };
+    expect(userMovies.metas.map((m) => m.id)).toEqual(["tt0816692", "tt1375666"]);
+    expect(userMovies.metas[0].type).toBe("movie");
+    expect(userMovies.metas[0].poster).toBeTruthy();
+
+    const userSeriesRes = await request.get(`/${aliceApiKey}/catalog/series/mms_user_series.json`);
+    expect(userSeriesRes.status()).toBe(200);
+    const userSeries = (await userSeriesRes.json()) as { metas: CatalogMeta[] };
+    expect(userSeries.metas).toHaveLength(1);
+    expect(userSeries.metas[0].id).toBe("tt0903747");
+    expect(userSeries.metas[0].type).toBe("series");
+    expect(userSeries.metas[0].releaseInfo).toContain("Last: S01E02");
+    expect(userSeries.metas[0].description).toContain("Last streamed: S01E02");
+
+    // Create a second user bob to verify per-user isolation vs shared Community catalogs
+    const loginRes = await request.post("/api/admin/login", {
+      data: { password: "test-admin-pass" },
+    });
+    expect(loginRes.status()).toBe(200);
+
+    const createBobRes = await request.post("/api/admin/users", {
+      data: { username: "bob" },
+    });
+    expect(createBobRes.status()).toBe(201);
+    const bob = (await createBobRes.json()) as { api_key: string };
+
+    try {
+      const bobUserMoviesRes = await request.get(
+        `/${bob.api_key}/catalog/movie/mms_user_movies.json`,
+      );
+      expect(bobUserMoviesRes.status()).toBe(200);
+      expect(((await bobUserMoviesRes.json()) as { metas: CatalogMeta[] }).metas).toEqual([]);
+
+      const bobUserSeriesRes = await request.get(
+        `/${bob.api_key}/catalog/series/mms_user_series.json`,
+      );
+      expect(bobUserSeriesRes.status()).toBe(200);
+      expect(((await bobUserSeriesRes.json()) as { metas: CatalogMeta[] }).metas).toEqual([]);
+
+      const communityMoviesRes = await request.get(
+        `/${bob.api_key}/catalog/movie/mms_community_movies.json`,
+      );
+      expect(communityMoviesRes.status()).toBe(200);
+      const communityMovies = (await communityMoviesRes.json()) as { metas: CatalogMeta[] };
+      expect(communityMovies.metas.map((m) => m.id)).toEqual(["tt0816692", "tt1375666"]);
+
+      const communityMoviesSkipRes = await request.get(
+        `/${bob.api_key}/catalog/movie/mms_community_movies/skip=1.json`,
+      );
+      expect(communityMoviesSkipRes.status()).toBe(200);
+      const communityMoviesSkip = (await communityMoviesSkipRes.json()) as { metas: CatalogMeta[] };
+      expect(communityMoviesSkip.metas.map((m) => m.id)).toEqual(["tt1375666"]);
+
+      const communitySeriesRes = await request.get(
+        `/${bob.api_key}/catalog/series/mms_community_series.json`,
+      );
+      expect(communitySeriesRes.status()).toBe(200);
+      const communitySeries = (await communitySeriesRes.json()) as { metas: CatalogMeta[] };
+      expect(communitySeries.metas).toHaveLength(1);
+      expect(communitySeries.metas[0].id).toBe("tt0903747");
+      expect(communitySeries.metas[0].releaseInfo).toContain("Last: S01E02");
+    } finally {
+      await request.delete(`/api/admin/users/${bob.api_key}`);
+    }
   });
 
   test("User Portal and Admin Dashboard torrent rendering, filtering, and deletion", async ({

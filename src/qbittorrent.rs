@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::db::parse_stremio_media_id;
 use crate::jackett::extract_btih_hex;
 use log::{debug, error, warn};
 use reqwest::{Client, multipart};
@@ -6,6 +7,89 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
+
+pub fn build_torrent_tags(stremio_id: &str) -> String {
+    if let Some((norm_stremio_id, imdb_id, media_type)) = parse_stremio_media_id(stremio_id) {
+        if media_type == "series" {
+            return format!("{},series,{}", imdb_id, norm_stremio_id);
+        }
+        return format!("{},movie", imdb_id);
+    }
+    stremio_id
+        .split(':')
+        .next()
+        .unwrap_or(stremio_id)
+        .trim()
+        .to_lowercase()
+}
+
+/// Parses a qBittorrent comma-separated `tags` string into
+/// `(base_imdb_id, optional_media_type, latest_episode_id)`.
+pub fn parse_torrent_tags(tags: &str) -> Option<(String, Option<String>, Option<String>)> {
+    let mut base_imdb_id: Option<String> = None;
+    let mut fallback_base: Option<String> = None;
+    let mut has_series_marker = false;
+    let mut has_movie_marker = false;
+    let mut latest_episode_id: Option<String> = None;
+
+    for raw_tag in tags.split(',') {
+        let tag = raw_tag.trim().to_lowercase();
+        if tag.is_empty() {
+            continue;
+        }
+        if tag == "series" {
+            has_series_marker = true;
+            continue;
+        }
+        if tag == "movie" {
+            has_movie_marker = true;
+            continue;
+        }
+        if tag.starts_with("tt") {
+            if let Some((norm_ep, base, media_type)) = parse_stremio_media_id(&tag) {
+                if media_type == "series" {
+                    has_series_marker = true;
+                    latest_episode_id = Some(norm_ep);
+                    if fallback_base.is_none() {
+                        fallback_base = Some(base);
+                    }
+                    continue;
+                }
+                if base_imdb_id.is_none() {
+                    base_imdb_id = Some(base);
+                }
+            } else if !tag.contains(':') && base_imdb_id.is_none() {
+                base_imdb_id = Some(tag);
+            } else if let Some(prefix) = tag.split(':').next()
+                && prefix.starts_with("tt")
+                && fallback_base.is_none()
+            {
+                fallback_base = Some(prefix.to_string());
+            }
+        }
+    }
+
+    let imdb_id = base_imdb_id.or(fallback_base)?;
+    let media_type = if has_series_marker || latest_episode_id.is_some() {
+        Some("series".to_string())
+    } else if has_movie_marker {
+        Some("movie".to_string())
+    } else {
+        None
+    };
+
+    Some((imdb_id, media_type, latest_episode_id))
+}
+
+fn torrent_has_tag(tags: &str, target: &str) -> bool {
+    let target = target.trim();
+    if target.is_empty() {
+        return false;
+    }
+    tags.split(',')
+        .map(str::trim)
+        .any(|item| item.eq_ignore_ascii_case(target))
+}
 
 pub struct QbitClient {
     client: Client,
@@ -311,7 +395,7 @@ impl QbitClient {
                 if let Ok(torrents) = res.json::<Vec<QbitTorrent>>().await {
                     torrents
                         .into_iter()
-                        .filter(|t| t.tags.contains(tag))
+                        .filter(|t| torrent_has_tag(&t.tags, tag))
                         .collect()
                 } else {
                     error!("Failed to parse qBittorrent torrents JSON");
@@ -510,6 +594,45 @@ impl QbitClient {
         }
     }
 
+    pub async fn add_torrent_tags(&self, hash: &str, tags: &str) -> bool {
+        let hash = hash.trim().to_lowercase();
+        let tags = tags.trim();
+        if hash.is_empty() || tags.is_empty() {
+            return true;
+        }
+
+        let sid = match self.get_session_cookie().await {
+            Some(s) => s,
+            None => return false,
+        };
+
+        debug!("Adding tags {:?} to torrent {}", tags, hash);
+        let params = [("hashes", hash.as_str()), ("tags", tags)];
+        let url = format!("{}/api/v2/torrents/addTags", self.config.qbittorrent_url);
+        match self
+            .client
+            .post(&url)
+            .header("Cookie", sid)
+            .form(&params)
+            .send()
+            .await
+        {
+            Ok(res) if res.status().is_success() => true,
+            Ok(res) => {
+                error!(
+                    "Failed to add tags to torrent {}, status: {}",
+                    hash,
+                    res.status()
+                );
+                false
+            }
+            Err(e) => {
+                error!("Error adding tags to torrent {}: {}", hash, e);
+                false
+            }
+        }
+    }
+
     pub async fn check_health(&self) -> bool {
         self.get_session_cookie().await.is_some()
     }
@@ -698,5 +821,51 @@ mod tests {
         );
         assert_eq!(compute_torrent_info_hash(b"not-bencode"), None);
         assert_eq!(compute_torrent_info_hash(b"d4:name3:abce"), None);
+    }
+
+    #[test]
+    fn builds_and_parses_torrent_tags_for_movies_and_series() {
+        assert_eq!(build_torrent_tags("TT1375666"), "tt1375666,movie");
+        assert_eq!(
+            build_torrent_tags("tt0903747:1:2"),
+            "tt0903747,series,tt0903747:1:2"
+        );
+
+        assert_eq!(
+            parse_torrent_tags("tt1375666, movie"),
+            Some(("tt1375666".to_string(), Some("movie".to_string()), None))
+        );
+        assert_eq!(
+            parse_torrent_tags("tt0903747, series, tt0903747:1:1, tt0903747:1:2"),
+            Some((
+                "tt0903747".to_string(),
+                Some("series".to_string()),
+                Some("tt0903747:1:2".to_string())
+            ))
+        );
+        assert_eq!(
+            parse_torrent_tags("tt0903747"),
+            Some(("tt0903747".to_string(), None, None))
+        );
+        assert_eq!(
+            parse_torrent_tags("tt0903747:2:5"),
+            Some((
+                "tt0903747".to_string(),
+                Some("series".to_string()),
+                Some("tt0903747:2:5".to_string())
+            ))
+        );
+        assert_eq!(parse_torrent_tags("manual, 1080p"), None);
+    }
+
+    #[test]
+    fn matches_comma_separated_tags_without_prefix_collisions() {
+        assert!(torrent_has_tag("tt1234, movie", "TT1234"));
+        assert!(torrent_has_tag(
+            "tt0903747, series, tt0903747:1:2",
+            "tt0903747"
+        ));
+        assert!(!torrent_has_tag("tt12345, movie", "tt1234"));
+        assert!(!torrent_has_tag("", "tt1234"));
     }
 }

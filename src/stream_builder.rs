@@ -1,4 +1,4 @@
-use crate::cinemeta::get_cinemeta_title;
+use crate::cinemeta::get_or_fetch_cinemeta_title;
 use crate::jackett::{JackettResult, TorznabParams, fetch_jackett_results};
 use crate::matcher::find_best_file_match;
 use crate::models::{Stream, StreamResponse};
@@ -215,10 +215,14 @@ pub async fn get_series_params(state: &AppState, stremio_id: &str) -> (bool, u32
         season = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(1);
         episode = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(1);
 
-        if let Some(t) = get_cinemeta_title(&state.http_client, "series", &series_id).await {
+        if let Some(t) =
+            get_or_fetch_cinemeta_title(&state.http_client, &state.db, "series", &series_id).await
+        {
             expected_title = format!("{} S{:02}E{:02}", t, season, episode);
         }
-    } else if let Some(t) = get_cinemeta_title(&state.http_client, "movie", stremio_id).await {
+    } else if let Some(t) =
+        get_or_fetch_cinemeta_title(&state.http_client, &state.db, "movie", stremio_id).await
+    {
         expected_title = t;
     }
 

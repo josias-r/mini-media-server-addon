@@ -1,6 +1,7 @@
 use super::{
     AppState, PlaceholderVideo, require_valid_api_key, stream::resolve_safe_download_path,
 };
+use crate::qbittorrent::build_torrent_tags;
 use axum::{
     extract::{Path, Query, Request, State},
     response::{IntoResponse, Redirect, Response},
@@ -81,7 +82,7 @@ pub async fn play_file(
 
     let _ = state
         .db
-        .update_watch_history(&api_key, &info_hash, "torrent");
+        .record_media_watch(&api_key, &stremio_id, &info_hash);
 
     let file_idx = params.get("fileIdx").and_then(|s| s.parse::<usize>().ok());
     let file_path = params.get("filePath").cloned().unwrap_or_default();
@@ -134,14 +135,16 @@ pub async fn play_file(
     );
     let already_requested_in_session = !state.triggered_torrents.write().await.insert(request_key);
 
-    if let Some(idx) = file_idx {
-        let qbit = state.qbit.clone();
-        let hash = info_hash.clone();
-        tokio::spawn(async move {
+    let qbit = state.qbit.clone();
+    let hash = info_hash.clone();
+    let tags = build_torrent_tags(&stremio_id);
+    tokio::spawn(async move {
+        if let Some(idx) = file_idx {
             qbit.set_file_priorities(&hash, &[idx], 1).await;
             qbit.resume_torrent(&hash).await;
-        });
-    }
+        }
+        qbit.add_torrent_tags(&hash, &tags).await;
+    });
 
     let file_priority = target_file.map(|f| f.priority);
     let file_size = target_file.map_or(0, |f| f.size);

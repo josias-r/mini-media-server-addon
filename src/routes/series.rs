@@ -1,5 +1,5 @@
 use super::{AppState, require_valid_api_key};
-use crate::cinemeta::get_cinemeta_title;
+use crate::cinemeta::get_or_fetch_cinemeta_title;
 use crate::jackett::TorznabParams;
 use crate::parser::is_definitely_wrong_episode;
 use crate::stream_builder::build_stream_response;
@@ -37,7 +37,9 @@ pub async fn series_stream(
     ];
 
     let mut expected_title = id_str.clone();
-    if let Some(title) = get_cinemeta_title(&state.http_client, "series", &series_id).await {
+    if let Some(title) =
+        get_or_fetch_cinemeta_title(&state.http_client, &state.db, "series", &series_id).await
+    {
         expected_title = format!("{} S{:02}E{:02}", title, season, episode);
         if state.config.jackett_search_type == "text" {
             fetch_plans = vec![

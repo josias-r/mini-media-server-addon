@@ -1,6 +1,7 @@
 use super::{AppState, PlaceholderVideo, require_valid_api_key};
 use crate::jackett::extract_btih_hex;
 use crate::matcher::find_best_file_match;
+use crate::qbittorrent::build_torrent_tags;
 use crate::stream_builder::get_series_params;
 use axum::{
     extract::{Path, Query, Request, State},
@@ -45,7 +46,11 @@ pub async fn trigger_download(
 
     let valid_initial_hash = normalize_valid_hash(&info_hash);
     if let Some(ref h) = valid_initial_hash {
-        let _ = state.db.update_watch_history(&api_key, h, "torrent");
+        let _ = state.db.record_media_watch(&api_key, &stremio_id, h);
+    } else {
+        let _ = state
+            .db
+            .record_media_watch(&api_key, &stremio_id, "unknown");
     }
 
     let magnet_opt = params.get("magnet").cloned();
@@ -82,11 +87,12 @@ pub async fn trigger_download(
             }
         }
 
+        let tags = build_torrent_tags(&task_stremio_id);
         let mut target_hash = initial_hash_clone.clone();
         if let Some(ref magnet) = magnet_opt {
             let resolved = task_state
                 .qbit
-                .resolve_and_add_torrent(magnet, &base_id, target_hash.as_deref())
+                .resolve_and_add_torrent(magnet, &tags, target_hash.as_deref())
                 .await;
             if target_hash.is_none() {
                 target_hash = resolved;
@@ -132,8 +138,9 @@ pub async fn trigger_download(
             if initial_hash_clone.is_none() {
                 let _ = task_state
                     .db
-                    .update_watch_history(&task_api_key, h, "torrent");
+                    .record_media_watch(&task_api_key, &task_stremio_id, h);
             }
+            task_state.qbit.add_torrent_tags(h, &tags).await;
 
             if !files.is_empty() {
                 let (is_series, season, episode, expected_title) =
