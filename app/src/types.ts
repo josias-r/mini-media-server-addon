@@ -68,7 +68,7 @@ export interface CreatedUserResponse {
   created_at: string;
 }
 
-export type OnboardingStage = "install" | "watch" | "done";
+export type OnboardingStage = "client" | "install" | "watch" | "done";
 
 export type TorrentFilter = "all" | "downloading" | "seeding" | "unwatched";
 

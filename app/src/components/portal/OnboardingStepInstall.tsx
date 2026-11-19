@@ -1,17 +1,8 @@
-import {
-  AlertTriangle,
-  ArrowDown,
-  ArrowRight,
-  Check,
-  ClipboardCopy,
-  ExternalLink,
-  Play,
-} from "lucide-preact";
-import { isIosDevice } from "../../utils";
+import { ArrowRight, Check, ClipboardCopy, Play } from "lucide-preact";
 import { Badge } from "../Badge";
 
 interface OnboardingStepInstallProps {
-  active: boolean;
+  state: "upcoming" | "active" | "completed";
   stremioLink: string;
   manifestUrl: string;
   copied: boolean;
@@ -20,9 +11,9 @@ interface OnboardingStepInstallProps {
   onReopenStep: () => void;
 }
 
-/** Step 2 onboarding card for downloading Stremio and installing the personal addon. */
+/** Step 3 onboarding card for installing the personal addon inside a compatible client. */
 export function OnboardingStepInstall({
-  active,
+  state,
   stremioLink,
   manifestUrl,
   copied,
@@ -30,7 +21,28 @@ export function OnboardingStepInstall({
   onCompleteStep,
   onReopenStep,
 }: OnboardingStepInstallProps) {
-  if (!active) {
+  if (state === "upcoming") {
+    return (
+      <div class="rounded-2xl border border-slate-800/80 bg-slate-900/40 p-4 sm:p-5">
+        <div class="flex items-center gap-3.5">
+          <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-700 bg-slate-800 text-sm font-bold text-slate-300">
+            3
+          </div>
+          <div class="min-w-0 flex-1">
+            <Badge tone="slate">Step 3 • Up Next</Badge>
+            <h2 class="mt-1 text-base font-semibold text-slate-200 sm:text-lg">
+              Install the Addon in Stremio
+            </h2>
+            <p class="mt-0.5 text-xs text-slate-400">
+              Complete Step 2 above to unlock your 1-click addon install link.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (state === "completed") {
     return (
       <div class="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-4 sm:p-5">
         <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -39,7 +51,7 @@ export function OnboardingStepInstall({
               <Check class="h-5 w-5" />
             </div>
             <div class="min-w-0">
-              <Badge tone="emerald">Step 2 • Completed</Badge>
+              <Badge tone="emerald">Step 3 • Completed</Badge>
               <h2 class="mt-1.5 text-base font-semibold text-white sm:text-lg">
                 Install the Addon in Stremio
               </h2>
@@ -63,16 +75,14 @@ export function OnboardingStepInstall({
     );
   }
 
-  const isIos = isIosDevice();
-
   return (
     <div class="rounded-2xl border-2 border-indigo-500/50 bg-slate-900/85 p-4 shadow-2xl shadow-indigo-500/10 backdrop-blur-sm sm:p-7">
       <div class="flex items-start gap-3.5">
         <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-indigo-500 text-sm font-bold text-white shadow-lg shadow-indigo-500/30">
-          2
+          3
         </div>
         <div class="min-w-0 flex-1">
-          <Badge tone="indigo">Step 2 • Do This Now</Badge>
+          <Badge tone="indigo">Step 3 • Do This Now</Badge>
           <h2 class="mt-1.5 text-lg font-bold text-white sm:text-xl">
             Install the Addon in Stremio
           </h2>
@@ -81,77 +91,6 @@ export function OnboardingStepInstall({
             your app.
           </p>
         </div>
-      </div>
-
-      {/* First-time Stremio helper + Compatible Clients jump link */}
-      <div class="mt-4 rounded-xl border border-slate-800 bg-slate-950/75 p-3.5 sm:mt-5 sm:p-4">
-        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div class="min-w-0">
-            <p class="text-sm font-medium text-slate-100">Don&apos;t have Stremio installed yet?</p>
-            <p class="mt-0.5 text-xs leading-relaxed text-slate-400">
-              Download the free Stremio app and create a free account first, then come back to this
-              page and click the button below.
-            </p>
-          </div>
-          <div class="flex shrink-0 flex-col items-stretch gap-1.5 sm:items-end">
-            <a
-              href="https://www.stremio.com/downloads"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="inline-flex min-h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3.5 py-2 text-xs font-semibold text-indigo-300 transition hover:bg-indigo-500/20"
-            >
-              Download Stremio Free
-              <ExternalLink class="h-3.5 w-3.5" />
-            </a>
-            <a
-              href="#compatible-clients"
-              class="inline-flex items-center justify-center gap-1 text-[11px] font-medium text-slate-400 transition hover:text-indigo-300 sm:justify-end"
-            >
-              Or view other compatible apps (Nuvio, Harbor)
-              <ArrowDown class="h-3 w-3" />
-            </a>
-          </div>
-        </div>
-
-        {isIos && (
-          <div
-            data-testid="ios-install-warning"
-            role="alert"
-            class="mt-3.5 rounded-xl border border-amber-500/35 bg-amber-500/10 p-3.5 text-amber-100"
-          >
-            <div class="flex items-start gap-2.5">
-              <AlertTriangle class="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
-              <div class="min-w-0 flex-1 space-y-1.5">
-                <p class="text-xs font-semibold text-amber-200 sm:text-sm">
-                  Using an iPhone or iPad? iOS App Store support is flaky
-                </p>
-                <p class="text-xs leading-relaxed text-amber-100/90">
-                  Apple is actively removing Stremio-compatible apps from the App Store, so native
-                  iOS support is unreliable. We recommend{" "}
-                  <strong class="font-semibold text-white">installing Stremio as a web app</strong>{" "}
-                  (open <span class="font-mono text-amber-200">web.stremio.com</span> in Safari and
-                  tap <strong class="font-semibold text-white">Share → Add to Home Screen</strong>)
-                  or{" "}
-                  <strong class="font-semibold text-white">
-                    looking online for a currently working iOS app
-                  </strong>
-                  .
-                </p>
-                <div class="pt-1">
-                  <a
-                    href="https://web.stremio.com/"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    class="inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-amber-400/35 bg-amber-500/15 px-3 py-1.5 text-xs font-semibold text-amber-200 transition hover:bg-amber-500/25"
-                  >
-                    Open Stremio Web App
-                    <ExternalLink class="h-3.5 w-3.5" />
-                  </a>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Primary 1-Click Install CTA */}
@@ -208,7 +147,7 @@ export function OnboardingStepInstall({
         </code>
       </div>
 
-      {/* Step 2 Completion Trigger */}
+      {/* Step 3 Completion Trigger */}
       <div class="mt-5 flex flex-col gap-3 border-t border-slate-800 pt-4 sm:flex-row sm:items-center sm:justify-between">
         <p class="text-xs text-slate-400 sm:text-sm">Already clicked install in your app?</p>
         <button

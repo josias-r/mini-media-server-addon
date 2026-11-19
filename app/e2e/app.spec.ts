@@ -101,12 +101,17 @@ test.describe.serial("Mini Media Server E2E", () => {
     await expect(page.getByText("Verified • Welcome, alice")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Welcome, alice!" })).toBeVisible();
 
-    // Stage 1 ("install"): Step 1 done, Step 2 active, Step 3 compact preview
+    // Stage 1 ("client"): Step 1 done, Step 2 active, Step 3 & Step 4 compact previews
     await expect(page.getByRole("heading", { name: "Personal Invite Activated" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Install Stremio or a Compatible App" }),
+    ).toBeVisible();
     await expect(page.getByRole("heading", { name: "Install the Addon in Stremio" })).toBeVisible();
     await expect(
       page.getByRole("heading", { name: "Pick Any Movie or Show & Press Play" }),
     ).toBeVisible();
+    const installLink = page.getByRole("link", { name: "1-Click Install in Stremio" });
+    await expect(installLink).toBeHidden();
     await expect(
       page.getByRole("heading", { name: "Want Subtitles or Extra Features?" }),
     ).toBeHidden();
@@ -127,19 +132,27 @@ test.describe.serial("Mini Media Server E2E", () => {
     await page.getByRole("button", { name: "Hide Key" }).click();
     await expect(page.locator("#api-key-input")).toBeHidden();
 
-    await expect(page.locator("code", { hasText: `/${aliceApiKey}/manifest.json` })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "My Active Downloads & Recent Streams" }),
+    ).toBeVisible();
 
-    const installLink = page.getByRole("link", { name: "1-Click Install in Stremio" });
+    // Mark Step 2 completed -> expands Step 3 ("install")
+    await page.getByRole("button", { name: /I Have the App — Next Step/i }).click();
+    await expect(page.getByRole("button", { name: "Show Download Step" })).toBeVisible();
+    await expect(page.locator("code", { hasText: `/${aliceApiKey}/manifest.json` })).toBeVisible();
+    await expect(installLink).toBeVisible();
     await expect(installLink).toHaveAttribute(
       "href",
       `stremio://localhost:7099/${aliceApiKey}/manifest.json`,
     );
 
-    await expect(
-      page.getByRole("heading", { name: "My Active Downloads & Recent Streams" }),
-    ).toBeVisible();
+    // Step 2 completion is reversible
+    await page.getByRole("button", { name: "Show Download Step" }).click();
+    await expect(installLink).toBeHidden();
+    await page.getByRole("button", { name: /I Have the App — Next Step/i }).click();
+    await expect(installLink).toBeVisible();
 
-    // Mark Step 2 completed -> expands Step 3 with subtitles & extra addons info
+    // Mark Step 3 completed -> expands Step 4 ("watch") with subtitles & extra addons info
     await page.getByRole("button", { name: /I've Installed It — Next Step/i }).click();
     await expect(page.getByRole("button", { name: "Show Install Steps" })).toBeVisible();
     await expect(
@@ -153,18 +166,21 @@ test.describe.serial("Mini Media Server E2E", () => {
       "https://stremio-addons.net/addons/opensubtitles-v3",
     );
 
-    // Step 2 completion is reversible
+    // Step 3 completion is reversible
     await page.getByRole("button", { name: "Show Install Steps" }).click();
     await expect(installLink).toBeVisible();
     await expect(
       page.getByRole("heading", { name: "Want Subtitles or Extra Features?" }),
     ).toBeHidden();
 
-    // Advance back to Step 3 and finish setup ("done")
+    // Advance back to Step 4 and finish setup ("done")
     await page.getByRole("button", { name: /I've Installed It — Next Step/i }).click();
     await page.getByRole("button", { name: /Got It — Finish Setup/i }).click();
 
     await expect(page.getByRole("heading", { name: "Personal Invite Activated" })).toBeHidden();
+    await expect(
+      page.getByRole("heading", { name: "Install Stremio or a Compatible App" }),
+    ).toBeHidden();
     await expect(page.getByRole("heading", { name: "Install the Addon in Stremio" })).toBeHidden();
     await expect(
       page.getByRole("heading", { name: "Pick Any Movie or Show & Press Play" }),
@@ -178,12 +194,18 @@ test.describe.serial("Mini Media Server E2E", () => {
     await page.reload();
     await expect(page.getByText("Verified • Welcome, alice")).toBeVisible();
     await expect(page.getByRole("button", { name: "Show Setup Guide" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Install Stremio or a Compatible App" }),
+    ).toBeHidden();
     await expect(page.getByRole("heading", { name: "Install the Addon in Stremio" })).toBeHidden();
 
-    // Show Setup Guide restores the 3-step onboarding flow
+    // Show Setup Guide restores the 4-step onboarding flow
     await page.getByRole("button", { name: "Show Setup Guide" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Install Stremio or a Compatible App" }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: /I Have the App — Next Step/i })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Install the Addon in Stremio" })).toBeVisible();
-    await expect(installLink).toBeVisible();
   });
 
   test("User and Community Stremio catalogs track movies and series episodes", async ({
@@ -541,8 +563,26 @@ test.describe.serial("Mini Media Server E2E", () => {
         "Very.Long.Movie.Title.2026.2160p.UHD.BluRay.REMUX.HEVC.TrueHD.7.1.Atmos-GROUP.mkv",
       ),
     ).toBeVisible();
-    await expect(page.getByRole("link", { name: "1-Click Install in Stremio" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Install Stremio or a Compatible App" }),
+    ).toBeVisible();
     await expect(page.getByRole("heading", { name: "Personal Invite Activated" })).toBeVisible();
+
+    const portalClientOverflow = await page.evaluate(() => ({
+      docOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+      headerOverflow:
+        (document.querySelector("header")?.scrollWidth ?? 0) > window.innerWidth ||
+        (document.querySelector("header")?.getBoundingClientRect().right ?? 0) > window.innerWidth,
+      mainOverflow: (document.querySelector("main")?.scrollWidth ?? 0) > window.innerWidth,
+    }));
+    expect(portalClientOverflow).toEqual({
+      docOverflow: false,
+      headerOverflow: false,
+      mainOverflow: false,
+    });
+
+    await page.getByRole("button", { name: /I Have the App — Next Step/i }).click();
+    await expect(page.getByRole("link", { name: "1-Click Install in Stremio" })).toBeVisible();
 
     const portalInstallOverflow = await page.evaluate(() => ({
       docOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
@@ -716,7 +756,7 @@ test.describe.serial("Mini Media Server E2E", () => {
 
       await page.goto(`/?key=${encodeURIComponent(iosKey)}`);
       await expect(
-        page.getByRole("heading", { name: "Install the Addon in Stremio" }),
+        page.getByRole("heading", { name: "Install Stremio or a Compatible App" }),
       ).toBeVisible();
 
       const warning = page.getByTestId("ios-install-warning");

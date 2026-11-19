@@ -6,6 +6,7 @@ import { Badge } from "../components/Badge";
 import { CompatibleClients } from "../components/portal/CompatibleClients";
 import { ConnectKeySection } from "../components/portal/ConnectKeySection";
 import { OnboardingDoneBanner } from "../components/portal/OnboardingDoneBanner";
+import { OnboardingStepClient } from "../components/portal/OnboardingStepClient";
 import { OnboardingStepInstall } from "../components/portal/OnboardingStepInstall";
 import { OnboardingStepInvite } from "../components/portal/OnboardingStepInvite";
 import { OnboardingStepWatch } from "../components/portal/OnboardingStepWatch";
@@ -32,7 +33,7 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
   const apiKey = useSignal("");
   const showKey = useSignal(false);
   const showKeyEditor = useSignal(false);
-  const onboardingStage = useSignal<OnboardingStage>("install");
+  const onboardingStage = useSignal<OnboardingStage>("client");
   const verifying = useSignal(false);
   const verification = useSignal<VerifyKeyResponse | null>(null);
   const verifyError = useSignal<string | null>(null);
@@ -103,7 +104,12 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
     const savedKey = localStorage.getItem(STORAGE_KEY)?.trim() ?? "";
     const savedStage = localStorage.getItem(ONBOARDING_STAGE_KEY);
 
-    if (savedStage === "install" || savedStage === "watch" || savedStage === "done") {
+    if (
+      savedStage === "client" ||
+      savedStage === "install" ||
+      savedStage === "watch" ||
+      savedStage === "done"
+    ) {
       onboardingStage.value = savedStage;
     }
 
@@ -113,7 +119,7 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
       apiKey.value = initialKey;
       if (keyFromQuery) {
         if (keyFromQuery !== savedKey) {
-          updateOnboardingStage("install");
+          updateOnboardingStage("client");
         }
         localStorage.setItem(STORAGE_KEY, keyFromQuery);
         const cleanUrl = `${window.location.pathname}${window.location.hash}`;
@@ -160,7 +166,7 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
     apiKey.value = "";
     showKey.value = false;
     showKeyEditor.value = false;
-    onboardingStage.value = "install";
+    onboardingStage.value = "client";
     verification.value = null;
     verifyError.value = null;
     localStorage.removeItem(STORAGE_KEY);
@@ -196,7 +202,7 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
               onToggleKeyEditor={() => {
                 showKeyEditor.value = !showKeyEditor.value;
               }}
-              onShowSetupGuide={() => updateOnboardingStage("install")}
+              onShowSetupGuide={() => updateOnboardingStage("client")}
               {...keyInputProps}
             />
           ) : (
@@ -217,7 +223,7 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
                   Welcome, {verification.value.username}!
                 </h1>
                 <p class="mt-2 max-w-2xl text-sm leading-relaxed text-slate-400 sm:text-base">
-                  Your personal invite is active. Follow these 3 quick steps to add Mini Media
+                  Your personal invite is active. Follow these 4 quick steps to add Mini Media
                   Server to Stremio and start watching.
                 </p>
               </div>
@@ -232,8 +238,20 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
                   {...keyInputProps}
                 />
 
+                <OnboardingStepClient
+                  active={onboardingStage.value === "client"}
+                  onCompleteStep={() => updateOnboardingStage("install")}
+                  onReopenStep={() => updateOnboardingStage("client")}
+                />
+
                 <OnboardingStepInstall
-                  active={onboardingStage.value === "install"}
+                  state={
+                    onboardingStage.value === "client"
+                      ? "upcoming"
+                      : onboardingStage.value === "install"
+                        ? "active"
+                        : "completed"
+                  }
                   stremioLink={stremioLink.value}
                   manifestUrl={manifestUrl.value}
                   copied={copied.value}
@@ -243,7 +261,7 @@ export function UserPortal({ onNavigate }: UserPortalProps) {
                 />
 
                 <OnboardingStepWatch
-                  active={onboardingStage.value !== "install"}
+                  active={onboardingStage.value === "watch"}
                   onFinishSetup={() => updateOnboardingStage("done")}
                 />
               </div>

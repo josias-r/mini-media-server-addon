@@ -6,22 +6,22 @@ interface OnboardingStepWatchProps {
   onFinishSetup: () => void;
 }
 
-/** Step 3 onboarding card with playback tips and community subtitle addons. */
+/** Step 4 onboarding card with playback tips and community subtitle addons. */
 export function OnboardingStepWatch({ active, onFinishSetup }: OnboardingStepWatchProps) {
   if (!active) {
     return (
       <div class="rounded-2xl border border-slate-800/80 bg-slate-900/40 p-4 sm:p-5">
         <div class="flex items-center gap-3.5">
           <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-700 bg-slate-800 text-sm font-bold text-slate-300">
-            3
+            4
           </div>
           <div class="min-w-0 flex-1">
-            <Badge tone="slate">Step 3 • Up Next</Badge>
+            <Badge tone="slate">Step 4 • Up Next</Badge>
             <h2 class="mt-1 text-base font-semibold text-slate-200 sm:text-lg">
               Pick Any Movie or Show &amp; Press Play
             </h2>
             <p class="mt-0.5 text-xs text-slate-400">
-              Complete Step 2 above to unlock watching tips &amp; subtitle addons.
+              Complete Step 3 above to unlock watching tips &amp; subtitle addons.
             </p>
           </div>
         </div>
@@ -33,10 +33,10 @@ export function OnboardingStepWatch({ active, onFinishSetup }: OnboardingStepWat
     <div class="rounded-2xl border-2 border-indigo-500/50 bg-slate-900/85 p-4 shadow-2xl shadow-indigo-500/10 backdrop-blur-sm sm:p-7">
       <div class="flex items-start gap-3.5">
         <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-indigo-500 text-sm font-bold text-white shadow-lg shadow-indigo-500/30">
-          3
+          4
         </div>
         <div class="min-w-0 flex-1">
-          <Badge tone="indigo">Step 3 • Final Step</Badge>
+          <Badge tone="indigo">Step 4 • Final Step</Badge>
           <h2 class="mt-1.5 text-lg font-bold text-white sm:text-xl">
             Pick Any Movie or Show &amp; Press Play
           </h2>
@@ -94,7 +94,7 @@ export function OnboardingStepWatch({ active, onFinishSetup }: OnboardingStepWat
         </div>
       </div>
 
-      {/* Step 3 Finish Trigger */}
+      {/* Step 4 Finish Trigger */}
       <div class="mt-5 flex flex-col gap-3 border-t border-slate-800 pt-4 sm:flex-row sm:items-center sm:justify-between">
         <p class="text-xs text-slate-400 sm:text-sm">
           All set? Hide this guide so your active downloads are front and center.
