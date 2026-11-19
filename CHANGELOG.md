@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1](https://github.com/josias-r/mini-media-server-addon/compare/v0.2.0...v0.2.1) (2026-11-19)
+
+
+### Bug Fixes
+
+* **compatible-clients:** update platform listings and update harbor link ([ba318b4](https://github.com/josias-r/mini-media-server-addon/commit/ba318b4ba4a68b608ad5ae17791eefe02555cee0))
+* **onboarding:** update onboarding steps to include client installation as a seperate step ([846adb0](https://github.com/josias-r/mini-media-server-addon/commit/846adb0213652d72fba322d3a4ec2c33981d839a))
+
 ## [0.2.0](https://github.com/josias-r/mini-media-server-addon/compare/v0.1.4...v0.2.0) (2026-11-18)
 
 
