@@ -3,7 +3,7 @@ import { ExternalLink, Tv } from "lucide-preact";
 const CLIENTS = [
   {
     name: "Stremio",
-    platforms: "Windows • macOS • Linux • Android • TV",
+    platforms: "macOS • Linux • Windows • Android • Android TV",
     description:
       "The official Stremio client with native addon support and seamless playback across desktop, mobile, and TV.",
     url: "https://www.stremio.com/downloads",
@@ -11,18 +11,18 @@ const CLIENTS = [
   },
   {
     name: "Nuvio",
-    platforms: "Android • Android TV • macOS • Windows • Samsung TV • LG TV",
+    platforms: "Android • Android TV • macOS • Linux • Windows • Samsung TV • LG TV",
     description:
       "A modern cross-platform Stremio-compatible media center for mobile, desktop, and smart TVs.",
     url: "https://nuvio.tv/",
     cta: "Visit Nuvio",
   },
   {
-    name: "Harbor",
-    platforms: "macOS • Windows • Linux",
+    name: "Harbor (beta)",
+    platforms: "macOS • Linux • Windows",
     description:
       "An open-source, customizable desktop client built for the Stremio addon ecosystem.",
-    url: "https://github.com/harborstremio/harbor",
+    url: "https://github.com/Harborofficial/Harbor",
     cta: "View on GitHub",
   },
 ];
