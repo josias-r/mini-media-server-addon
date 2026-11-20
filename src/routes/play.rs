@@ -1,9 +1,11 @@
 use super::{
-    AppState, PlaceholderVideo, require_valid_api_key, stream::resolve_safe_download_path,
+    AppState, PlaceholderState, build_live_placeholder_redirect, require_valid_api_key,
+    stream::resolve_safe_download_path,
 };
 use crate::qbittorrent::build_torrent_tags;
 use axum::{
-    extract::{Path, Query, Request, State},
+    extract::{Path, Query, State},
+    http::HeaderMap,
     response::{IntoResponse, Redirect, Response},
 };
 use std::collections::HashMap;
@@ -43,7 +45,7 @@ pub fn is_torrent_stalled(torrent_state: &str, dlspeed: u64) -> bool {
     dlspeed == 0 && matches!(s, "stalledDL" | "metaDL" | "error" | "missingFiles")
 }
 
-/// Determines which placeholder video to serve immediately, or `None` if ready to stream directly.
+/// Determines which placeholder state to serve immediately, or `None` if ready to stream directly.
 pub fn decide_play_placeholder(
     exists_on_disk: bool,
     file_priority: Option<u8>,
@@ -52,7 +54,7 @@ pub fn decide_play_placeholder(
     was_unrequested_param: bool,
     already_requested_in_session: bool,
     torrent_stalled: bool,
-) -> Option<PlaceholderVideo> {
+) -> Option<PlaceholderState> {
     if exists_on_disk && is_file_stream_ready(file_size, file_progress) {
         return None;
     }
@@ -60,32 +62,60 @@ pub fn decide_play_placeholder(
     let is_unrequested =
         file_priority == Some(0) || (file_priority.is_none() && was_unrequested_param);
     if is_unrequested && !already_requested_in_session {
-        return Some(PlaceholderVideo::EpisodeRequested);
+        return Some(PlaceholderState::EpisodeRequested);
     }
 
     if torrent_stalled {
-        return Some(PlaceholderVideo::Stalled);
+        return Some(PlaceholderState::Stalled);
     }
 
-    Some(PlaceholderVideo::Buffering)
+    if file_progress >= 0.10 {
+        return Some(PlaceholderState::Ready);
+    }
+
+    Some(PlaceholderState::buffering_for_progress(file_progress))
 }
 
 pub async fn play_file(
     State(state): State<AppState>,
     Path((api_key, stremio_id, info_hash)): Path<(String, String, String)>,
     Query(params): Query<HashMap<String, String>>,
-    req: Request,
+    headers: HeaderMap,
 ) -> Response {
     if let Some(err) = require_valid_api_key(&state, &api_key) {
         return err;
+    }
+
+    let file_idx = params.get("fileIdx").and_then(|s| s.parse::<usize>().ok());
+    let file_path = params.get("filePath").cloned().unwrap_or_default();
+
+    let session_key = crate::placeholder_stream::build_session_key(
+        &api_key,
+        "play",
+        &stremio_id,
+        &info_hash,
+        file_idx,
+        &file_path,
+    );
+    if crate::placeholder_stream::has_nonzero_range_header(&headers)
+        && state.live_sessions.has_active_session(&session_key).await
+    {
+        return build_live_placeholder_redirect(
+            &state.config.public_url,
+            &api_key,
+            "play",
+            &stremio_id,
+            &info_hash,
+            PlaceholderState::Buffering(0),
+            file_idx,
+            Some(&file_path),
+        );
     }
 
     let _ = state
         .db
         .record_media_watch(&api_key, &stremio_id, &info_hash);
 
-    let file_idx = params.get("fileIdx").and_then(|s| s.parse::<usize>().ok());
-    let file_path = params.get("filePath").cloned().unwrap_or_default();
     let was_unrequested = params.get("unrequested").is_some_and(|v| v == "1");
 
     let exists_on_disk = resolve_safe_download_path(&state.config.download_path, &file_path)
@@ -160,7 +190,16 @@ pub async fn play_file(
         already_requested_in_session,
         torrent_stalled,
     ) {
-        return placeholder.serve(req).await;
+        return build_live_placeholder_redirect(
+            &state.config.public_url,
+            &api_key,
+            "play",
+            &stremio_id,
+            &info_hash,
+            placeholder,
+            file_idx,
+            Some(&file_path),
+        );
     }
 
     let redirect_url = format!(
@@ -215,29 +254,29 @@ mod tests {
         // First click on unrequested episode -> EpisodeRequested
         assert_eq!(
             decide_play_placeholder(false, Some(0), GB, 0.0, true, false, false),
-            Some(PlaceholderVideo::EpisodeRequested)
+            Some(PlaceholderState::EpisodeRequested)
         );
 
-        // Second click on same episode in session -> Buffering (or Stalled if stalled)
+        // Second click on same episode in session -> Buffering(0) (or Stalled if stalled)
         assert_eq!(
             decide_play_placeholder(false, Some(0), GB, 0.0, true, true, false),
-            Some(PlaceholderVideo::Buffering)
+            Some(PlaceholderState::Buffering(0))
         );
         assert_eq!(
             decide_play_placeholder(false, Some(0), GB, 0.0, true, true, true),
-            Some(PlaceholderVideo::Stalled)
+            Some(PlaceholderState::Stalled)
         );
 
-        // Actively downloading file below threshold -> Buffering
+        // Actively downloading file below threshold -> Buffering(pct)
         assert_eq!(
             decide_play_placeholder(true, Some(1), GB, 0.01, false, false, false),
-            Some(PlaceholderVideo::Buffering)
+            Some(PlaceholderState::Buffering(1))
         );
 
         // Stalled torrent below threshold -> Stalled
         assert_eq!(
             decide_play_placeholder(true, Some(1), GB, 0.01, false, false, true),
-            Some(PlaceholderVideo::Stalled)
+            Some(PlaceholderState::Stalled)
         );
 
         // Ready file on disk -> None (redirect to direct stream)
@@ -246,29 +285,37 @@ mod tests {
             None
         );
 
-        // Ready in qBit but file missing on disk -> Buffering
+        // Ready in qBit (>= 10%) but file missing on disk -> Ready
+        assert_eq!(
+            decide_play_placeholder(false, Some(1), GB, 0.15, false, false, false),
+            Some(PlaceholderState::Ready)
+        );
+        // Below 10% and missing on disk -> Buffering(pct)
         assert_eq!(
             decide_play_placeholder(false, Some(1), GB, 0.05, false, false, false),
-            Some(PlaceholderVideo::Buffering)
+            Some(PlaceholderState::Buffering(5))
         );
     }
 
     #[test]
-    fn all_placeholder_mp4_files_exist_on_disk() {
-        let variants = [
-            PlaceholderVideo::DownloadStarted,
-            PlaceholderVideo::FetchingMetadata,
-            PlaceholderVideo::EpisodeRequested,
-            PlaceholderVideo::Buffering,
-            PlaceholderVideo::Stalled,
-        ];
-        for variant in variants {
-            let path = std::path::Path::new(variant.file_path());
-            assert!(
-                path.exists(),
-                "Missing generated placeholder video: {}",
-                variant.file_path()
-            );
+    fn all_placeholder_segments_and_config_exist_on_disk() {
+        assert!(
+            std::path::Path::new("placeholders/placeholders.yaml").exists(),
+            "Missing placeholders/placeholders.yaml"
+        );
+        assert!(
+            std::path::Path::new("placeholders/init.mp4").exists(),
+            "Missing placeholders/init.mp4"
+        );
+        for state in PlaceholderState::all() {
+            for idx in 0..7 {
+                let seg_path = format!("placeholders/{}/seg_{}.m4s", state.id(), idx);
+                assert!(
+                    std::path::Path::new(&seg_path).exists(),
+                    "Missing generated placeholder segment: {}",
+                    seg_path
+                );
+            }
         }
     }
 }

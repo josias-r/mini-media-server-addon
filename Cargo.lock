@@ -923,9 +923,11 @@ name = "mini-media-server-addon"
 version = "0.2.1"
 dependencies = [
  "axum",
+ "bytes",
  "chrono",
  "dotenvy",
  "env_logger",
+ "futures-util",
  "log",
  "quick-xml",
  "regex",
