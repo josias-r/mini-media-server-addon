@@ -1,0 +1,59 @@
+download_started:
+  title: Download started!
+  sub: Please check back soon
+
+fetching_metadata:
+  title: Fetching torrent info...
+  sub: Please wait a moment
+
+episode_requested:
+  title: Episode download started!
+  sub: Please check back soon
+
+stalled:
+  title: Waiting for peers...
+  sub: Download currently stalled
+
+buffering_0:
+  title: Buffering 0%
+  sub: Starting download...
+
+buffering_1:
+  title: Buffering 1%
+  sub: Download in progress...
+
+buffering_2:
+  title: Buffering 2%
+  sub: Download in progress...
+
+buffering_3:
+  title: Buffering 3%
+  sub: Download in progress...
+
+buffering_4:
+  title: Buffering 4%
+  sub: Download in progress...
+
+buffering_5:
+  title: Buffering 5%
+  sub: Download in progress...
+
+buffering_6:
+  title: Buffering 6%
+  sub: Download in progress...
+
+buffering_7:
+  title: Buffering 7%
+  sub: Download in progress...
+
+buffering_8:
+  title: Buffering 8%
+  sub: Download in progress...
+
+buffering_9:
+  title: Buffering 9%
+  sub: Download in progress...
+
+ready:
+  title: ">= 10%"
+  sub: Restart stream to watch now
