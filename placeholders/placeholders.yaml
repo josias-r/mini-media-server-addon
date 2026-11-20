@@ -12,7 +12,7 @@ episode_requested:
 
 stalled:
   title: Waiting on peers...
-  sub: Slow torrent — or try another
+  sub: If this takes too long, try another
 
 buffering_0:
   title: Buffering 0%

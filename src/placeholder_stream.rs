@@ -1191,12 +1191,14 @@ mod tests {
     fn loads_all_generated_placeholder_states_and_segments() {
         let bank = PlaceholderBank::load(Path::new("placeholders"), DEFAULT_DURATION_HOURS)
             .expect("should load generated placeholders");
+        let expected_fragments =
+            ((DEFAULT_DURATION_HOURS.clamp(1, 12) * 3600 * 30).div_ceil(64)).min(u16::MAX as u64);
         assert_eq!(bank.states.len(), 15);
-        assert_eq!(bank.total_fragments, 3375);
+        assert_eq!(bank.total_fragments, expected_fragments);
         assert_eq!(bank.slot_size % 4096, 0);
         assert_eq!(
             bank.total_len,
-            bank.header.len() as u64 + 3375 * bank.slot_size
+            bank.header.len() as u64 + expected_fragments * bank.slot_size
         );
     }
 
