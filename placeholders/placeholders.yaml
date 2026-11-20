@@ -1,59 +1,59 @@
 download_started:
-  title: Download started!
-  sub: Please check back soon
+  title: Fetching your video!
+  sub: Hang tight — updates live
 
 fetching_metadata:
-  title: Fetching torrent info...
-  sub: Please wait a moment
+  title: Sniffing out files...
+  sub: Loading torrent metadata
 
 episode_requested:
-  title: Episode download started!
-  sub: Please check back soon
+  title: Fetching episode!
+  sub: Hang tight — updates live
 
 stalled:
-  title: Waiting for peers...
-  sub: Download currently stalled
+  title: Waiting on peers...
+  sub: Slow torrent — or try another
 
 buffering_0:
   title: Buffering 0%
-  sub: Starting download...
+  sub: Waking up the server hamsters...
 
 buffering_1:
   title: Buffering 1%
-  sub: Download in progress...
+  sub: Untangling the internet cables...
 
 buffering_2:
   title: Buffering 2%
-  sub: Download in progress...
+  sub: Negotiating with your Wi-Fi...
 
 buffering_3:
   title: Buffering 3%
-  sub: Download in progress...
+  sub: Asking the router nicely...
 
 buffering_4:
   title: Buffering 4%
-  sub: Download in progress...
+  sub: Herding stray pixels...
 
 buffering_5:
   title: Buffering 5%
-  sub: Download in progress...
+  sub: Painting the frames by hand...
 
 buffering_6:
   title: Buffering 6%
-  sub: Download in progress...
+  sub: Bribing the bandwidth gods...
 
 buffering_7:
   title: Buffering 7%
-  sub: Download in progress...
+  sub: Making sure the audio actually matches...
 
 buffering_8:
   title: Buffering 8%
-  sub: Download in progress...
+  sub: Pretending this is super fast...
 
 buffering_9:
   title: Buffering 9%
-  sub: Download in progress...
+  sub: Almost there, grab your popcorn!
 
 ready:
-  title: ">= 10%"
-  sub: Restart stream to watch now
+  title: Ready to watch!
+  sub: Go back & re-select stream

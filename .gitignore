@@ -14,7 +14,8 @@ app/playwright-report
 # db
 data.db
 
+# python
+__pycache__
 
 # Added by cargo
-
 /target
