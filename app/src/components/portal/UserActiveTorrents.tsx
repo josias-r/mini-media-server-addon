@@ -46,7 +46,7 @@ export function UserActiveTorrents({ torrents, verifying, onRefresh }: UserActiv
           </p>
         </div>
       ) : (
-        <div class="grid gap-3">
+        <div class="grid grid-cols-1 gap-3">
           {torrents.map((torrent) => {
             const pct = clampProgressPct(torrent.progress);
             const stateInfo = formatStateLabel(torrent.state);
@@ -55,12 +55,12 @@ export function UserActiveTorrents({ torrents, verifying, onRefresh }: UserActiv
             return (
               <div
                 key={torrent.hash}
-                class="rounded-xl border border-slate-800 bg-slate-900/70 p-3.5 transition hover:border-slate-700 sm:p-4"
+                class="min-w-0 rounded-xl border border-slate-800 bg-slate-900/70 p-3.5 transition hover:border-slate-700 sm:p-4"
               >
-                <div class="flex flex-wrap items-start justify-between gap-2">
+                <div class="flex flex-wrap items-start justify-between gap-2 sm:flex-nowrap">
                   <div class="min-w-0 flex-1">
                     <p
-                      class="line-clamp-2 break-all text-sm font-medium text-slate-100 sm:truncate"
+                      class="text-sm font-medium text-slate-100 max-sm:line-clamp-2 max-sm:break-all sm:truncate"
                       title={torrent.name}
                     >
                       {torrent.name}
