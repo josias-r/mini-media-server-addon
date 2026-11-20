@@ -39,12 +39,12 @@ export function AdminTorrentCard({
   const downloading = isDownloadingState(torrent.state, torrent.progress);
 
   return (
-    <div class="rounded-2xl border border-slate-800 bg-slate-900/75 p-3.5 transition hover:border-slate-700 sm:p-4">
+    <div class="min-w-0 rounded-2xl border border-slate-800 bg-slate-900/75 p-3.5 transition hover:border-slate-700 sm:p-4">
       <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div class="min-w-0 flex-1 space-y-2">
-          <div class="flex flex-wrap items-start justify-between gap-2 sm:items-center sm:justify-start">
+          <div class="flex flex-wrap items-start justify-between gap-2 sm:flex-nowrap sm:items-center sm:justify-start">
             <h3
-              class="line-clamp-2 min-w-0 break-all text-sm font-semibold text-white sm:truncate sm:text-base"
+              class="min-w-0 text-sm font-semibold text-white max-sm:line-clamp-2 max-sm:break-all sm:truncate sm:text-base"
               title={torrent.name}
             >
               {torrent.name}

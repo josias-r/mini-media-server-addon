@@ -1,0 +1,63 @@
+download_started:
+  title: Fetching your video!
+  sub: Hang tight — updates live
+
+fetching_metadata:
+  title: Sniffing out files...
+  sub: Loading torrent metadata
+
+episode_requested:
+  title: Fetching episode!
+  sub: Hang tight — updates live
+
+stalled:
+  title: Waiting on peers...
+  sub: If this takes too long, try another
+
+buffering_0:
+  title: Buffering 0%
+  sub: Waking up the server hamsters...
+
+buffering_1:
+  title: Buffering 1%
+  sub: Untangling the internet cables...
+
+buffering_2:
+  title: Buffering 2%
+  sub: Negotiating with your Wi-Fi...
+
+buffering_3:
+  title: Buffering 3%
+  sub: Asking the router nicely...
+
+buffering_4:
+  title: Buffering 4%
+  sub: Herding stray pixels...
+
+buffering_5:
+  title: Buffering 5%
+  sub: Painting the frames by hand...
+
+buffering_6:
+  title: Buffering 6%
+  sub: Bribing the bandwidth gods...
+
+buffering_7:
+  title: Buffering 7%
+  sub: Making sure the audio actually matches...
+
+buffering_8:
+  title: Buffering 8%
+  sub: Pretending this is super fast...
+
+buffering_9:
+  title: Buffering 9%
+  sub: Almost there, grab your popcorn!
+
+ready:
+  title: Ready to watch!
+  sub: Go back & re-select stream
+
+files_missing:
+  title: Files missing on server!
+  sub: Server config issue — tell the admin

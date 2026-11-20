@@ -9,55 +9,51 @@ pub mod stream;
 pub mod trigger;
 
 use crate::config::Config;
+pub use crate::placeholder_stream::PlaceholderState;
 use crate::qbittorrent::QbitClient;
 use axum::Router;
-use axum::extract::Request;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::http::{HeaderValue, StatusCode, header};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use reqwest::Client;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tower::ServiceExt;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlaceholderVideo {
-    DownloadStarted,
-    FetchingMetadata,
-    EpisodeRequested,
-    Buffering,
-    Stalled,
-}
-
-impl PlaceholderVideo {
-    /// Returns the filesystem path of the baked placeholder MP4 for this state.
-    pub fn file_path(self) -> &'static str {
-        match self {
-            Self::DownloadStarted => "placeholders/download_started.mp4",
-            Self::FetchingMetadata => "placeholders/fetching_metadata.mp4",
-            Self::EpisodeRequested => "placeholders/episode_requested.mp4",
-            Self::Buffering => "placeholders/buffering.mp4",
-            Self::Stalled => "placeholders/stalled.mp4",
-        }
+/// Builds a non-cacheable 307 redirect to the live-updating virtual fMP4 placeholder stream.
+#[allow(clippy::too_many_arguments)]
+pub fn build_live_placeholder_redirect(
+    public_url: &str,
+    api_key: &str,
+    mode: &str,
+    stremio_id: &str,
+    info_hash: &str,
+    initial: PlaceholderState,
+    file_idx: Option<usize>,
+    file_path: Option<&str>,
+) -> Response {
+    let base = public_url.trim_end_matches('/');
+    let mut url = format!(
+        "{}/{}/placeholder-live/{}/{}/{}.mp4?initial={}",
+        base,
+        urlencoding::encode(api_key),
+        urlencoding::encode(mode),
+        urlencoding::encode(stremio_id),
+        urlencoding::encode(info_hash),
+        initial.id(),
+    );
+    if let Some(idx) = file_idx {
+        url.push_str(&format!("&fileIdx={}", idx));
     }
-
-    /// Serves the state-specific placeholder MP4 (falling back to `placeholder.mp4` if missing).
-    pub async fn serve(self, req: Request) -> Response {
-        let path = std::path::Path::new(self.file_path());
-        let target = if path.exists() {
-            path
-        } else {
-            std::path::Path::new("placeholder.mp4")
-        };
-        ServeFile::new(target)
-            .oneshot(req)
-            .await
-            .unwrap()
-            .into_response()
+    if let Some(fp) = file_path.filter(|s| !s.is_empty()) {
+        url.push_str(&format!("&filePath={}", urlencoding::encode(fp)));
     }
+    let mut res = Redirect::temporary(&url).into_response();
+    res.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    res
 }
 
 #[derive(Clone)]
@@ -68,6 +64,8 @@ pub struct AppState {
     pub db: Arc<crate::db::DbClient>,
     pub admin_session_token: String,
     pub triggered_torrents: Arc<RwLock<HashSet<String>>>,
+    pub placeholder_bank: Option<Arc<crate::placeholder_stream::PlaceholderBank>>,
+    pub live_sessions: Arc<crate::placeholder_stream::LiveSessionStore>,
 }
 
 pub fn require_valid_api_key(state: &AppState, api_key: &str) -> Option<Response> {
@@ -106,6 +104,10 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/{api_key}/stream-file/{info_hash}",
             get(stream::stream_file),
+        )
+        .route(
+            "/{api_key}/placeholder-live/{mode}/{stremio_id}/{info_hash}",
+            get(crate::placeholder_stream::serve_live_placeholder),
         )
         .nest("/api", api::router())
         .fallback_service(spa_service)

@@ -5,9 +5,11 @@ edition = "2024"
 
 [dependencies]
 axum = "0.8.9"
+bytes = "1.12.1"
 chrono = "0.4.45"
 dotenvy = "0.15.7"
 env_logger = "0.11.11"
+futures-util = { version = "0.3.33", default-features = false, features = ["std"] }
 log = "0.4.33"
 quick-xml = { version = "0.41.0", features = ["serialize"] }
 regex = "1.13.1"

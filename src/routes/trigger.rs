@@ -1,10 +1,11 @@
-use super::{AppState, PlaceholderVideo, require_valid_api_key};
+use super::{AppState, PlaceholderState, build_live_placeholder_redirect, require_valid_api_key};
 use crate::jackett::extract_btih_hex;
 use crate::matcher::find_best_file_match;
 use crate::qbittorrent::build_torrent_tags;
 use crate::stream_builder::get_series_params;
 use axum::{
-    extract::{Path, Query, Request, State},
+    extract::{Path, Query, State},
+    http::HeaderMap,
     response::Response,
 };
 use std::collections::{HashMap, HashSet};
@@ -38,10 +39,23 @@ pub async fn trigger_download(
     State(state): State<AppState>,
     Path((api_key, stremio_id, info_hash)): Path<(String, String, String)>,
     Query(params): Query<HashMap<String, String>>,
-    req: Request,
+    headers: HeaderMap,
 ) -> Response {
     if let Some(err) = require_valid_api_key(&state, &api_key) {
         return err;
+    }
+
+    if crate::placeholder_stream::has_nonzero_range_header(&headers) {
+        return build_live_placeholder_redirect(
+            &state.config.public_url,
+            &api_key,
+            "trigger",
+            &stremio_id,
+            &info_hash,
+            PlaceholderState::FetchingMetadata,
+            None,
+            None,
+        );
     }
 
     let valid_initial_hash = normalize_valid_hash(&info_hash);
@@ -63,9 +77,9 @@ pub async fn trigger_download(
     let already_existing = params.get("existing").is_some_and(|v| v == "1");
     let newly_inserted = state.triggered_torrents.write().await.insert(trigger_key);
     let placeholder = if already_existing || !newly_inserted {
-        PlaceholderVideo::FetchingMetadata
+        PlaceholderState::FetchingMetadata
     } else {
-        PlaceholderVideo::DownloadStarted
+        PlaceholderState::DownloadStarted
     };
 
     let task_state = state.clone();
@@ -183,7 +197,16 @@ pub async fn trigger_download(
         }
     });
 
-    placeholder.serve(req).await
+    build_live_placeholder_redirect(
+        &state.config.public_url,
+        &api_key,
+        "trigger",
+        &stremio_id,
+        &info_hash,
+        placeholder,
+        None,
+        None,
+    )
 }
 
 #[cfg(test)]

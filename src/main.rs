@@ -5,6 +5,7 @@ mod jackett;
 mod matcher;
 mod models;
 mod parser;
+mod placeholder_stream;
 mod qbittorrent;
 mod routes;
 mod stream_builder;
@@ -34,6 +35,36 @@ async fn main() {
     // Ensure admin password is generated/exists
     let _ = db.get_admin_password().unwrap();
 
+    let placeholders_dir =
+        std::env::var("PLACEHOLDERS_DIR").unwrap_or_else(|_| "placeholders".to_string());
+    let duration_hours = std::env::var("PLACEHOLDER_DURATION_HOURS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(placeholder_stream::DEFAULT_DURATION_HOURS);
+    let placeholder_bank = match placeholder_stream::PlaceholderBank::load(
+        std::path::Path::new(&placeholders_dir),
+        duration_hours,
+    ) {
+        Ok(bank) => {
+            info!(
+                "Loaded virtual placeholder bank from {:?} (slot_size={} B, total_len={} MiB, fragments={})",
+                placeholders_dir,
+                bank.slot_size,
+                bank.total_len / (1024 * 1024),
+                bank.total_fragments
+            );
+            Some(Arc::new(bank))
+        }
+        Err(e) => {
+            log::warn!(
+                "Could not load placeholder bank from {:?}: {}; falling back to static placeholder.mp4",
+                placeholders_dir,
+                e
+            );
+            None
+        }
+    };
+
     let state = routes::AppState {
         config: Arc::new(config.clone()),
         qbit: Arc::new(qbit),
@@ -41,6 +72,8 @@ async fn main() {
         db: Arc::new(db),
         admin_session_token: uuid::Uuid::new_v4().to_string(),
         triggered_torrents: Arc::new(RwLock::new(HashSet::new())),
+        placeholder_bank,
+        live_sessions: Arc::new(placeholder_stream::LiveSessionStore::default()),
     };
 
     // Spawn background retention worker

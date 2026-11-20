@@ -1,4 +1,4 @@
-use super::{AppState, PlaceholderVideo, require_valid_api_key};
+use super::{AppState, PlaceholderState, build_live_placeholder_redirect, require_valid_api_key};
 use axum::http::StatusCode;
 use axum::http::header::RANGE;
 use axum::{
@@ -63,10 +63,19 @@ pub async fn stream_file(
         .unwrap_or(false);
     if !has_bytes {
         log::warn!(
-            "File does not exist or is empty on disk (yet): {:?}; serving buffering placeholder",
+            "File does not exist or is empty on disk (yet): {:?}; serving missing-files placeholder",
             full_path
         );
-        return PlaceholderVideo::Buffering.serve(req).await;
+        return build_live_placeholder_redirect(
+            &state.config.public_url,
+            &api_key,
+            "stream",
+            "unknown",
+            &info_hash,
+            PlaceholderState::FilesMissing,
+            None,
+            Some(file_path),
+        );
     }
 
     let range_header = req

@@ -118,7 +118,7 @@ export function AdminTorrentManager({
 
       {/* Search, Filter Tabs, Sort */}
       <div class="flex flex-col gap-2.5 rounded-2xl border border-slate-800 bg-slate-900/60 p-3 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:p-3.5">
-        <div class="relative flex-1">
+        <div class="relative min-w-0 flex-1">
           <Search class="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-slate-500" />
           <input
             type="text"
@@ -174,7 +174,7 @@ export function AdminTorrentManager({
             : "No torrents match the current filter."}
         </div>
       ) : (
-        <div class="grid gap-3">
+        <div class="grid grid-cols-1 gap-3">
           {filteredTorrents.map((torrent) => (
             <AdminTorrentCard
               key={torrent.hash}

@@ -214,28 +214,31 @@ test.describe.serial("Mini Media Server E2E", () => {
     expect(aliceApiKey).not.toBe("");
 
     // Trigger and play movies + multiple episodes of a series for alice.
-    // Note: Playwright's webServer runs with cwd=app/, so placeholder.serve() may return 404
-    // after recording watch history while still executing the route handler.
+    // Use maxRedirects: 0 since trigger/play redirect (307) to the 2-hour live placeholder stream.
     const triggerMovie = await request.get(
       `/${aliceApiKey}/trigger-download/tt1375666/aaaa1111bbbb2222cccc3333dddd4444eeee5555`,
+      { maxRedirects: 0 },
     );
-    expect([200, 404]).toContain(triggerMovie.status());
+    expect([200, 307, 404]).toContain(triggerMovie.status());
 
     const playMovie = await request.get(
       `/${aliceApiKey}/play-file/tt0816692/bbbb1111cccc2222dddd3333eeee4444ffff5555?fileIdx=0&filePath=Interstellar.mkv`,
+      { maxRedirects: 0 },
     );
-    expect([200, 404]).toContain(playMovie.status());
+    expect([200, 307, 404]).toContain(playMovie.status());
 
     const seasonHash = "cccc1111dddd2222eeee3333ffff4444aaaa5555";
     const triggerEp1 = await request.get(
       `/${aliceApiKey}/trigger-download/tt0903747:1:1/${seasonHash}`,
+      { maxRedirects: 0 },
     );
-    expect([200, 404]).toContain(triggerEp1.status());
+    expect([200, 307, 404]).toContain(triggerEp1.status());
 
     const playEp2 = await request.get(
       `/${aliceApiKey}/play-file/tt0903747:1:2/${seasonHash}?fileIdx=1&filePath=Breaking.Bad.S01E02.mkv`,
+      { maxRedirects: 0 },
     );
-    expect([200, 404]).toContain(playEp2.status());
+    expect([200, 307, 404]).toContain(playEp2.status());
 
     type CatalogMeta = {
       id: string;
@@ -779,6 +782,189 @@ test.describe.serial("Mini Media Server E2E", () => {
         docOverflow: false,
         mainOverflow: false,
       });
+    } finally {
+      await context.close();
+    }
+  });
+
+  test("Desktop viewport layout renders cleanly without horizontal overflow", async ({
+    browser,
+  }) => {
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 800 },
+    });
+
+    try {
+      const page = await context.newPage();
+      const desktopKey = "33333333-4444-5555-6666-777777777777";
+      const shortTitle = "The Odyssey (2026) [1080p] [BluRay] [5.1]";
+      const longTitle =
+        "Very.Long.Movie.Title.2026.2160p.UHD.BluRay.REMUX.HEVC.TrueHD.7.1.Atmos.Multi.Audio.Extended.Directors.Cut.Super.Long.Release.Group.Name-GROUP.mkv";
+
+      const mockTorrents = [
+        {
+          hash: "aaaa1111bbbb2222cccc3333dddd4444eeee5555",
+          name: shortTitle,
+          size: 3_414_498_344,
+          progress: 0.76,
+          state: "downloading",
+          dlspeed: 13_641_973,
+          upspeed: 70_236,
+          eta: 52,
+          added_on: Math.floor(Date.now() / 1000) - 180,
+          last_watched_at: "2026-11-20 22:10:00",
+          expires_at: "2029-08-15T22:10:00Z",
+        },
+        {
+          hash: "ffff9999eeee8888dddd7777cccc6666bbbb5555",
+          name: longTitle,
+          size: 24_696_061_952,
+          progress: 1.0,
+          state: "uploading",
+          dlspeed: 0,
+          upspeed: 524_288,
+          eta: 0,
+          added_on: Math.floor(Date.now() / 1000) - 86400,
+          last_watched_at: null,
+          expires_at: "2029-08-14T22:10:00Z",
+        },
+      ];
+
+      await page.route("**/api/verify*", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            valid: true,
+            username: "desktopuser",
+            created_at: "2026-11-18 18:00:00",
+            active_torrents: mockTorrents.map((t) => ({
+              hash: t.hash,
+              name: t.name,
+              size: t.size,
+              progress: t.progress,
+              state: t.state,
+              dlspeed: t.dlspeed,
+              last_watched_at: t.last_watched_at,
+            })),
+          }),
+        });
+      });
+
+      await page.goto(`/?key=${encodeURIComponent(desktopKey)}`);
+      await expect(page.getByText("Verified • Welcome, desktopuser")).toBeVisible();
+      await expect(page.getByText(shortTitle)).toBeVisible();
+      await expect(page.getByText(longTitle)).toBeVisible();
+
+      const portalOverflow = await page.evaluate(() => ({
+        docOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+        headerOverflow:
+          (document.querySelector("header")?.scrollWidth ?? 0) > window.innerWidth ||
+          (document.querySelector("header")?.getBoundingClientRect().right ?? 0) >
+            window.innerWidth,
+        mainOverflow: (document.querySelector("main")?.scrollWidth ?? 0) > window.innerWidth,
+      }));
+      expect(portalOverflow).toEqual({
+        docOverflow: false,
+        headerOverflow: false,
+        mainOverflow: false,
+      });
+
+      const mainBox = await page.locator("main").boundingBox();
+      expect(mainBox).not.toBeNull();
+      const userTorrentSection = page.locator("section", {
+        has: page.getByRole("heading", { name: "My Active Downloads & Recent Streams" }),
+      });
+      const userTorrentCards = userTorrentSection.locator("div.rounded-xl");
+      expect(await userTorrentCards.count()).toBe(2);
+      for (let i = 0; i < (await userTorrentCards.count()); i++) {
+        const cardBox = await userTorrentCards.nth(i).boundingBox();
+        expect(cardBox).not.toBeNull();
+        expect(cardBox!.x + cardBox!.width).toBeLessThanOrEqual(mainBox!.x + mainBox!.width + 1);
+      }
+
+      await page.unroute("**/api/verify*");
+
+      await page.route("**/api/admin/overview", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            health: { qbittorrent: true, jackett: true },
+            config: {
+              public_url: "http://localhost:7099",
+              retention_days: 7,
+              jackett_search_type: "text",
+            },
+            users: [
+              {
+                username: "desktopuser",
+                api_key: desktopKey,
+                created_at: "2026-11-18 18:00:00",
+                watch_count: 2,
+                last_watched_at: "2026-11-20 22:10:00",
+              },
+            ],
+            torrents: mockTorrents,
+          }),
+        });
+      });
+
+      await page.goto("/admin");
+      await page.locator("#admin-password").fill("new-secret-pass");
+      await page.getByRole("button", { name: "Sign In" }).click();
+
+      await expect(page.getByRole("heading", { name: "Torrents & Storage Manager" })).toBeVisible();
+      await expect(page.getByText(shortTitle)).toBeVisible();
+      await expect(page.getByText(longTitle)).toBeVisible();
+
+      const adminOverflow = await page.evaluate(() => ({
+        docOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+        headerOverflow:
+          (document.querySelector("header")?.scrollWidth ?? 0) > window.innerWidth ||
+          (document.querySelector("header")?.getBoundingClientRect().right ?? 0) >
+            window.innerWidth,
+        mainOverflow: (document.querySelector("main")?.scrollWidth ?? 0) > window.innerWidth,
+      }));
+      expect(adminOverflow).toEqual({
+        docOverflow: false,
+        headerOverflow: false,
+        mainOverflow: false,
+      });
+
+      const filterBar = page
+        .locator("div.rounded-2xl", {
+          has: page.getByPlaceholder("Filter by torrent name or hash..."),
+        })
+        .first();
+      const filterBarBox = await filterBar.boundingBox();
+      expect(filterBarBox).not.toBeNull();
+      const filterBarRight = filterBarBox!.x + filterBarBox!.width;
+
+      for (const title of [shortTitle, longTitle]) {
+        const card = page.locator("div.rounded-2xl", { hasText: title }).first();
+        const cardBox = await card.boundingBox();
+        expect(cardBox).not.toBeNull();
+        const cardRight = cardBox!.x + cardBox!.width;
+        expect(Math.abs(cardRight - filterBarRight)).toBeLessThanOrEqual(2);
+
+        const deleteBtn = card.getByRole("button", { name: "Delete" });
+        await expect(deleteBtn).toBeVisible();
+        const deleteBox = await deleteBtn.boundingBox();
+        expect(deleteBox).not.toBeNull();
+        const deleteRight = deleteBox!.x + deleteBox!.width;
+        expect(deleteRight).toBeLessThanOrEqual(cardRight);
+        expect(deleteRight).toBeLessThanOrEqual(1280);
+      }
+
+      const longCard = page.locator("div.rounded-2xl", { hasText: longTitle }).first();
+      const titleBox = await longCard.locator("h3").boundingBox();
+      const badgeBox = await longCard.getByText(/• \d+%/).boundingBox();
+      expect(titleBox).not.toBeNull();
+      expect(badgeBox).not.toBeNull();
+      expect(Math.abs(badgeBox!.y - titleBox!.y)).toBeLessThan(12);
+
+      await page.unroute("**/api/admin/overview");
     } finally {
       await context.close();
     }
