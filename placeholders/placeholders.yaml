@@ -57,3 +57,7 @@ buffering_9:
 ready:
   title: Ready to watch!
   sub: Go back & re-select stream
+
+files_missing:
+  title: Files missing on server!
+  sub: Server config issue — tell the admin

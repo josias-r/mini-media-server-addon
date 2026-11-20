@@ -55,7 +55,8 @@ pub fn decide_play_placeholder(
     already_requested_in_session: bool,
     torrent_stalled: bool,
 ) -> Option<PlaceholderState> {
-    if exists_on_disk && is_file_stream_ready(file_size, file_progress) {
+    let stream_ready = is_file_stream_ready(file_size, file_progress);
+    if exists_on_disk && stream_ready {
         return None;
     }
 
@@ -65,12 +66,12 @@ pub fn decide_play_placeholder(
         return Some(PlaceholderState::EpisodeRequested);
     }
 
-    if torrent_stalled {
-        return Some(PlaceholderState::Stalled);
+    if !exists_on_disk && (stream_ready || file_progress >= 0.10) {
+        return Some(PlaceholderState::FilesMissing);
     }
 
-    if file_progress >= 0.10 {
-        return Some(PlaceholderState::Ready);
+    if torrent_stalled {
+        return Some(PlaceholderState::Stalled);
     }
 
     Some(PlaceholderState::buffering_for_progress(file_progress))
@@ -285,15 +286,24 @@ mod tests {
             None
         );
 
-        // Ready in qBit (>= 10%) but file missing on disk -> Ready
+        // Ready in qBit (80% or 5% of 1 GB) but file missing on disk -> FilesMissing
         assert_eq!(
-            decide_play_placeholder(false, Some(1), GB, 0.15, false, false, false),
-            Some(PlaceholderState::Ready)
+            decide_play_placeholder(false, Some(1), GB, 0.80, false, false, false),
+            Some(PlaceholderState::FilesMissing)
         );
-        // Below 10% and missing on disk -> Buffering(pct)
         assert_eq!(
             decide_play_placeholder(false, Some(1), GB, 0.05, false, false, false),
-            Some(PlaceholderState::Buffering(5))
+            Some(PlaceholderState::FilesMissing)
+        );
+        // Below ready threshold (1% of 1 GB) and missing on disk -> Buffering(1)
+        assert_eq!(
+            decide_play_placeholder(false, Some(1), GB, 0.01, false, false, false),
+            Some(PlaceholderState::Buffering(1))
+        );
+        // On disk at 12% of 100 MB (below 20 MB ready threshold) -> Buffering(9)
+        assert_eq!(
+            decide_play_placeholder(true, Some(1), 100 * MB, 0.12, false, false, false),
+            Some(PlaceholderState::Buffering(9))
         );
     }
 

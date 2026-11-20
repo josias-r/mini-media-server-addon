@@ -63,7 +63,7 @@ pub async fn stream_file(
         .unwrap_or(false);
     if !has_bytes {
         log::warn!(
-            "File does not exist or is empty on disk (yet): {:?}; serving buffering placeholder",
+            "File does not exist or is empty on disk (yet): {:?}; serving missing-files placeholder",
             full_path
         );
         return build_live_placeholder_redirect(
@@ -72,7 +72,7 @@ pub async fn stream_file(
             "stream",
             "unknown",
             &info_hash,
-            PlaceholderState::Buffering(0),
+            PlaceholderState::FilesMissing,
             None,
             Some(file_path),
         );

@@ -1,5 +1,6 @@
 use crate::matcher::find_best_file_match;
 use crate::routes::play::{is_file_stream_ready, is_torrent_stalled};
+use crate::routes::stream::resolve_safe_download_path;
 use crate::routes::{AppState, require_valid_api_key};
 use crate::stream_builder::get_series_params;
 use axum::body::Body;
@@ -44,6 +45,7 @@ pub enum PlaceholderState {
     Stalled,
     Buffering(u8),
     Ready,
+    FilesMissing,
 }
 
 impl PlaceholderState {
@@ -65,6 +67,7 @@ impl PlaceholderState {
             Self::Buffering(8) => "buffering_8",
             Self::Buffering(_) => "buffering_9",
             Self::Ready => "ready",
+            Self::FilesMissing => "files_missing",
         }
     }
 
@@ -86,11 +89,12 @@ impl PlaceholderState {
             "buffering_8" => Some(Self::Buffering(8)),
             "buffering_9" => Some(Self::Buffering(9)),
             "ready" => Some(Self::Ready),
+            "files_missing" | "files-missing" => Some(Self::FilesMissing),
             _ => None,
         }
     }
 
-    /// Encodes the state into a compact `u8` (`0..=14`) for lock-free atomic sharing.
+    /// Encodes the state into a compact `u8` (`0..=15`) for lock-free atomic sharing.
     pub fn to_u8(self) -> u8 {
         match self {
             Self::DownloadStarted => 0,
@@ -99,6 +103,7 @@ impl PlaceholderState {
             Self::Stalled => 3,
             Self::Buffering(p) => 4 + p.min(9),
             Self::Ready => 14,
+            Self::FilesMissing => 15,
         }
     }
 
@@ -111,12 +116,13 @@ impl PlaceholderState {
             3 => Self::Stalled,
             4..=13 => Self::Buffering(v - 4),
             14 => Self::Ready,
+            15 => Self::FilesMissing,
             _ => Self::Buffering(0),
         }
     }
 
-    /// Returns all 15 placeholder states required on disk.
-    pub fn all() -> [Self; 15] {
+    /// Returns all 16 placeholder states required on disk.
+    pub fn all() -> [Self; 16] {
         [
             Self::DownloadStarted,
             Self::FetchingMetadata,
@@ -133,6 +139,7 @@ impl PlaceholderState {
             Self::Buffering(8),
             Self::Buffering(9),
             Self::Ready,
+            Self::FilesMissing,
         ]
     }
 
@@ -196,19 +203,39 @@ pub fn has_nonzero_range_header(headers: &HeaderMap) -> bool {
     matches!(start_str.parse::<u64>(), Ok(start) if start > 0)
 }
 
-/// Maps live qBittorrent file progress & stall status to a placeholder state without checking disk.
+fn file_exists_nonempty(download_root: &str, file_path: &str) -> bool {
+    resolve_safe_download_path(download_root, file_path).is_some_and(|p| {
+        std::fs::metadata(p)
+            .map(|m| m.is_file() && m.len() > 0)
+            .unwrap_or(false)
+    })
+}
+
+/// Maps live qBittorrent file progress, stall status, and disk presence to a placeholder state.
 pub fn decide_live_file_state(
+    exists_on_disk: bool,
     file_size: u64,
     file_progress: f64,
     torrent_stalled: bool,
 ) -> PlaceholderState {
-    if file_progress >= 0.10 || is_file_stream_ready(file_size, file_progress) {
-        PlaceholderState::Ready
-    } else if torrent_stalled {
-        PlaceholderState::Stalled
-    } else {
-        PlaceholderState::buffering_for_progress(file_progress)
+    let stream_ready = is_file_stream_ready(file_size, file_progress);
+    if stream_ready {
+        return if exists_on_disk {
+            PlaceholderState::Ready
+        } else {
+            PlaceholderState::FilesMissing
+        };
     }
+
+    if file_progress >= 0.10 && !exists_on_disk {
+        return PlaceholderState::FilesMissing;
+    }
+
+    if torrent_stalled {
+        return PlaceholderState::Stalled;
+    }
+
+    PlaceholderState::buffering_for_progress(file_progress)
 }
 
 #[derive(Debug, Clone)]
@@ -433,13 +460,13 @@ fn write_tfdt(buf: &mut [u8], offset: usize, is_v1: bool, value: u64) {
 }
 
 impl PlaceholderBank {
-    /// Loads `init.mp4` and all 15 × 7 `.m4s` placeholder segments and precomputes the virtual fMP4 layout.
+    /// Loads `init.mp4` and all 16 × 7 `.m4s` placeholder segments and precomputes the virtual fMP4 layout.
     pub fn load(dir: &Path, duration_hours: u64) -> Result<Self, String> {
         let init_path = dir.join("init.mp4");
         let init_bytes = std::fs::read(&init_path)
             .map_err(|e| format!("Failed to read {:?}: {}", init_path, e))?;
 
-        let mut states = HashMap::with_capacity(15);
+        let mut states = HashMap::with_capacity(16);
         let mut max_seg_len = 0usize;
 
         for state in PlaceholderState::all() {
@@ -813,13 +840,17 @@ async fn poll_live_state_once(
                         .is_some_and(|p| !p.is_empty() && f.name == p)
             });
 
+            let target_path = cache.resolved_file_path.as_deref().unwrap_or("");
+            let exists_on_disk = file_exists_nonempty(&app_state.config.download_path, target_path);
+
             Some(match target_file {
-                Some((_, f)) => decide_live_file_state(f.size, f.progress, stalled),
+                Some((_, f)) => decide_live_file_state(exists_on_disk, f.size, f.progress, stalled),
                 None if stalled => PlaceholderState::Stalled,
                 None => PlaceholderState::Buffering(0),
             })
         }
         "stream" => {
+            let exists_on_disk = file_exists_nonempty(&app_state.config.download_path, file_path);
             let files = tokio::time::timeout(
                 Duration::from_millis(1500),
                 app_state.qbit.get_torrent_files(info_hash),
@@ -832,12 +863,14 @@ async fn poll_live_state_once(
                 .find(|f| !file_path.is_empty() && f.name == file_path);
 
             Some(match target_file {
-                Some(f) => decide_live_file_state(f.size, f.progress, false),
-                None => PlaceholderState::Buffering(0),
+                Some(f) => decide_live_file_state(exists_on_disk, f.size, f.progress, false),
+                None if exists_on_disk => PlaceholderState::Ready,
+                None => PlaceholderState::FilesMissing,
             })
         }
         _ => {
             // "play" mode
+            let exists_on_disk = file_exists_nonempty(&app_state.config.download_path, file_path);
             let (files, tagged_torrents) =
                 tokio::time::timeout(Duration::from_millis(1500), async {
                     tokio::join!(
@@ -863,7 +896,7 @@ async fn poll_live_state_once(
             let stalled = parent.is_some_and(|t| is_torrent_stalled(&t.state, t.dlspeed));
 
             Some(match target_file {
-                Some(f) => decide_live_file_state(f.size, f.progress, stalled),
+                Some(f) => decide_live_file_state(exists_on_disk, f.size, f.progress, stalled),
                 None if stalled => PlaceholderState::Stalled,
                 None => PlaceholderState::Buffering(0),
             })
@@ -1193,7 +1226,7 @@ mod tests {
             .expect("should load generated placeholders");
         let expected_fragments =
             ((DEFAULT_DURATION_HOURS.clamp(1, 12) * 3600 * 30).div_ceil(64)).min(u16::MAX as u64);
-        assert_eq!(bank.states.len(), 15);
+        assert_eq!(bank.states.len(), 16);
         assert_eq!(bank.total_fragments, expected_fragments);
         assert_eq!(bank.slot_size % 4096, 0);
         assert_eq!(
@@ -1222,6 +1255,7 @@ mod tests {
             PlaceholderState::Buffering(8),
             PlaceholderState::Buffering(9),
             PlaceholderState::Stalled,
+            PlaceholderState::FilesMissing,
             PlaceholderState::Ready,
             PlaceholderState::Ready,
         ];
@@ -1385,38 +1419,53 @@ mod tests {
     }
 
     #[test]
-    fn decide_live_file_state_ignores_disk_and_transitions_at_10_percent_or_ready() {
+    fn decide_live_file_state_handles_ready_and_files_missing() {
         const MB: u64 = 1024 * 1024;
         const GB: u64 = 1024 * 1024 * 1024;
 
+        // Jumps straight to Ready once stream-ready on disk (even at ~3.5%)
         assert_eq!(
-            decide_live_file_state(GB, 0.0, false),
+            decide_live_file_state(true, GB, 0.035, false),
+            PlaceholderState::Ready
+        );
+        // Ready in qBit (> 10% or stream-ready) but missing on disk -> FilesMissing
+        assert_eq!(
+            decide_live_file_state(false, GB, 0.80, false),
+            PlaceholderState::FilesMissing
+        );
+        assert_eq!(
+            decide_live_file_state(false, GB, 0.05, false),
+            PlaceholderState::FilesMissing
+        );
+        assert_eq!(
+            decide_live_file_state(false, 100 * MB, 0.10, false),
+            PlaceholderState::FilesMissing
+        );
+        assert_eq!(
+            decide_live_file_state(false, 100 * MB, 0.12, true),
+            PlaceholderState::FilesMissing
+        );
+        // On disk at 12% of 100 MB (below 20 MB ready threshold) -> Buffering(9)
+        assert_eq!(
+            decide_live_file_state(true, 100 * MB, 0.12, false),
+            PlaceholderState::Buffering(9)
+        );
+        // Still downloading below ready threshold -> Buffering(pct) or Stalled
+        assert_eq!(
+            decide_live_file_state(false, GB, 0.0, false),
             PlaceholderState::Buffering(0)
         );
         assert_eq!(
-            decide_live_file_state(100 * MB, 0.095, false),
-            PlaceholderState::Buffering(9)
+            decide_live_file_state(false, GB, 0.01, false),
+            PlaceholderState::Buffering(1)
         );
         assert_eq!(
-            decide_live_file_state(GB, 0.035, false),
-            PlaceholderState::Ready
-        );
-        assert_eq!(
-            decide_live_file_state(GB, 0.01, true),
+            decide_live_file_state(false, GB, 0.01, true),
             PlaceholderState::Stalled
-        );
-        // Ready immediately at >= 10% even on small files (<200MB) and regardless of disk state
-        assert_eq!(
-            decide_live_file_state(100 * MB, 0.10, false),
-            PlaceholderState::Ready
-        );
-        assert_eq!(
-            decide_live_file_state(100 * MB, 0.12, true),
-            PlaceholderState::Ready
         );
         // Also Ready if stream-ready threshold is met before 10% (e.g. > 64 MB and >= 1% on 20 GB)
         assert_eq!(
-            decide_live_file_state(20 * GB, 0.012, false),
+            decide_live_file_state(true, 20 * GB, 0.012, false),
             PlaceholderState::Ready
         );
     }
@@ -1426,6 +1475,14 @@ mod tests {
         for st in PlaceholderState::all() {
             assert_eq!(PlaceholderState::from_u8(st.to_u8()), st);
         }
+        assert_eq!(
+            PlaceholderState::from_id("files_missing"),
+            Some(PlaceholderState::FilesMissing)
+        );
+        assert_eq!(
+            PlaceholderState::from_id("files-missing"),
+            Some(PlaceholderState::FilesMissing)
+        );
     }
 
     #[tokio::test]
