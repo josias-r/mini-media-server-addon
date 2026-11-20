@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.0](https://github.com/josias-r/mini-media-server-addon/compare/v0.2.1...v0.3.0) (2026-11-20)
+
+
+### Features
+
+* add 'files missing' placeholder state and related functionality ([0703b93](https://github.com/josias-r/mini-media-server-addon/commit/0703b9367564b2f4ef1904bc3679f51fe76a04c7))
+* stream download state in live chunks ([bacf2e7](https://github.com/josias-r/mini-media-server-addon/commit/bacf2e78058337152de67af029b042f582a99edf))
+
+
+### Bug Fixes
+
+* fix admin overflow styling issue on desktop ([3af5649](https://github.com/josias-r/mini-media-server-addon/commit/3af56494863d93104c1d843a4800bcd8453ac3d8))
+* improve state messages ([48a162d](https://github.com/josias-r/mini-media-server-addon/commit/48a162d715a8005ab1afd87caa0b2ad88fd76c12))
+
 ## [0.2.1](https://github.com/josias-r/mini-media-server-addon/compare/v0.2.0...v0.2.1) (2026-11-19)
 
 
