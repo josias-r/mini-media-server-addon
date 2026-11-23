@@ -1,8 +1,9 @@
-use super::{
-    AppState, PlaceholderState, build_live_placeholder_redirect, require_valid_api_key,
-    stream::resolve_safe_download_path,
+use super::{AppState, PlaceholderState, build_live_placeholder_redirect, require_valid_api_key};
+use crate::domain::{
+    base_imdb_id, build_torrent_tags, decide_play_placeholder, file_exists_nonempty,
+    find_target_file, is_torrent_stalled, select_next_episode_to_prefetch,
 };
-use crate::qbittorrent::{QbitFile, build_torrent_tags};
+use crate::placeholder::{build_session_key, has_nonzero_range_header};
 use axum::{
     extract::{Path, Query, State},
     http::HeaderMap,
@@ -10,123 +11,6 @@ use axum::{
 };
 use std::collections::HashMap;
 use std::time::Duration;
-
-/// Minimum bytes downloaded for standard/large files (20 MB) to ensure container headers
-/// (first/last pieces) and initial playback clusters are written to disk.
-const MIN_READY_BYTES: u64 = 20 * 1024 * 1024;
-/// Upper byte cap (64 MB): once at least 64 MB and >= 1% of a large file (e.g. 4K remux)
-/// are downloaded, we do not require waiting for the full 3% percentage threshold.
-const CAP_READY_BYTES: u64 = 64 * 1024 * 1024;
-/// Default minimum progress fraction (3%) for medium files.
-const MIN_READY_PROGRESS: f64 = 0.03;
-/// Minimum progress fraction (20%) for very small files (<= 20 MB).
-const SMALL_FILE_READY_PROGRESS: f64 = 0.20;
-
-/// Returns whether a torrent file has enough sequential/header data downloaded to begin playback.
-pub fn is_file_stream_ready(file_size: u64, progress: f64) -> bool {
-    if progress >= 1.0 {
-        return true;
-    }
-    if file_size == 0 {
-        return progress >= MIN_READY_PROGRESS;
-    }
-    if file_size <= MIN_READY_BYTES {
-        return progress >= SMALL_FILE_READY_PROGRESS;
-    }
-    let downloaded_bytes = ((file_size as f64) * progress) as u64;
-    downloaded_bytes >= MIN_READY_BYTES
-        && (progress >= MIN_READY_PROGRESS
-            || (downloaded_bytes >= CAP_READY_BYTES && progress >= 0.01))
-}
-
-/// Returns whether a qBittorrent torrent state represents a stalled download with zero speed.
-pub fn is_torrent_stalled(torrent_state: &str, dlspeed: u64) -> bool {
-    let s = torrent_state.trim();
-    dlspeed == 0 && matches!(s, "stalledDL" | "metaDL" | "error" | "missingFiles")
-}
-
-/// Determines which placeholder state to serve immediately, or `None` if ready to stream directly.
-pub fn decide_play_placeholder(
-    exists_on_disk: bool,
-    file_priority: Option<u8>,
-    file_size: u64,
-    file_progress: f64,
-    was_unrequested_param: bool,
-    already_requested_in_session: bool,
-    torrent_stalled: bool,
-) -> Option<PlaceholderState> {
-    let stream_ready = is_file_stream_ready(file_size, file_progress);
-    if exists_on_disk && stream_ready {
-        return None;
-    }
-
-    let is_unrequested =
-        file_priority == Some(0) || (file_priority.is_none() && was_unrequested_param);
-    if is_unrequested && !already_requested_in_session {
-        return Some(PlaceholderState::EpisodeRequested);
-    }
-
-    if !exists_on_disk && (stream_ready || file_progress >= 0.10) {
-        return Some(PlaceholderState::FilesMissing);
-    }
-
-    if torrent_stalled {
-        return Some(PlaceholderState::Stalled);
-    }
-
-    Some(PlaceholderState::buffering_for_progress(file_progress))
-}
-
-fn parse_series_episode_id(stremio_id: &str) -> Option<(String, u32, u32)> {
-    let parts: Vec<&str> = stremio_id.trim().split(':').collect();
-    if parts.len() < 3 {
-        return None;
-    }
-    let base = parts[0].trim();
-    if base.is_empty() {
-        return None;
-    }
-    let season: u32 = parts[1].trim().parse().ok()?;
-    let episode: u32 = parts[2].trim().parse().ok()?;
-    Some((base.to_lowercase(), season, episode))
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NextEpisodePrefetch {
-    pub file_id: usize,
-    pub file_path: String,
-    pub season: u32,
-    pub episode: u32,
-}
-
-pub fn select_next_episode_to_prefetch(
-    stremio_id: &str,
-    torrent_name: Option<&str>,
-    files: &[QbitFile],
-    current_file_vec_idx: usize,
-) -> Option<NextEpisodePrefetch> {
-    let (_, season, episode) = parse_series_episode_id(stremio_id)?;
-    let file_infos: Vec<(&str, u64)> = files.iter().map(|f| (f.name.as_str(), f.size)).collect();
-    let next_match = crate::matcher::find_next_episode_file(
-        &file_infos,
-        torrent_name,
-        current_file_vec_idx,
-        season,
-        episode,
-    )?;
-
-    let next_file = &files[next_match.file_vec_idx];
-    if next_file.priority != 0 {
-        return None;
-    }
-
-    Some(NextEpisodePrefetch {
-        file_id: next_file.index.unwrap_or(next_match.file_vec_idx),
-        file_path: next_file.name.clone(),
-        season: next_match.season,
-        episode: next_match.episode,
-    })
-}
 
 pub async fn play_file(
     State(state): State<AppState>,
@@ -141,7 +25,7 @@ pub async fn play_file(
     let file_idx = params.get("fileIdx").and_then(|s| s.parse::<usize>().ok());
     let file_path = params.get("filePath").cloned().unwrap_or_default();
 
-    let session_key = crate::placeholder_stream::build_session_key(
+    let session_key = build_session_key(
         &api_key,
         "play",
         &stremio_id,
@@ -149,7 +33,7 @@ pub async fn play_file(
         file_idx,
         &file_path,
     );
-    if crate::placeholder_stream::has_nonzero_range_header(&headers)
+    if has_nonzero_range_header(&headers)
         && state.live_sessions.has_active_session(&session_key).await
     {
         return build_live_placeholder_redirect(
@@ -170,14 +54,9 @@ pub async fn play_file(
 
     let was_unrequested = params.get("unrequested").is_some_and(|v| v == "1");
 
-    let exists_on_disk = resolve_safe_download_path(&state.config.download_path, &file_path)
-        .is_some_and(|p| {
-            std::fs::metadata(p)
-                .map(|m| m.is_file() && m.len() > 0)
-                .unwrap_or(false)
-        });
+    let exists_on_disk = file_exists_nonempty(&state.config.download_path, &file_path);
 
-    let base_id = stremio_id.split(':').next().unwrap_or(&stremio_id);
+    let base_id = base_imdb_id(&stremio_id);
     let qbit_lookup = tokio::time::timeout(Duration::from_millis(1500), async {
         tokio::join!(
             state.qbit.get_torrent_files(&info_hash),
@@ -197,10 +76,7 @@ pub async fn play_file(
         }
     };
 
-    let target_file = files.iter().enumerate().find(|(i, f)| {
-        file_idx.is_some_and(|idx| f.index.unwrap_or(*i) == idx)
-            || (!file_path.is_empty() && f.name == file_path)
-    });
+    let target_file = find_target_file(&files, file_idx, &file_path);
 
     let parent_torrent = tagged_torrents
         .iter()
@@ -320,7 +196,7 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::db::{DbClient, MediaMetadata};
-    use crate::placeholder_stream::LiveSessionStore;
+    use crate::placeholder::LiveSessionStore;
     use crate::qbittorrent::QbitClient;
     use crate::routes::create_router;
     use axum::{
@@ -418,11 +294,8 @@ mod tests {
             let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
             loop {
                 let notified = self.notify.notified();
-                {
-                    let calls = self.calls.lock().unwrap();
-                    if predicate(&calls) {
-                        return;
-                    }
+                if predicate(&self.calls.lock().unwrap()) {
+                    return;
                 }
                 if tokio::time::timeout_at(deadline, notified).await.is_err() {
                     let calls = self.calls.lock().unwrap();
@@ -438,43 +311,32 @@ mod tests {
     }
 
     fn parse_multipart_fields(headers: &HeaderMap, body: &Bytes) -> HashMap<String, String> {
-        let mut fields = HashMap::new();
-        let Some(ct) = headers
+        let Some(boundary) = headers
             .get(header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
+            .and_then(|ct| {
+                ct.split(';')
+                    .find_map(|p| p.trim().strip_prefix("boundary="))
+                    .map(|b| b.trim_matches('"'))
+            })
         else {
-            return fields;
-        };
-        let Some(boundary) = ct
-            .split(';')
-            .find_map(|part| part.trim().strip_prefix("boundary="))
-            .map(|b| b.trim_matches('"'))
-        else {
-            return fields;
+            return HashMap::new();
         };
 
-        let body_str = String::from_utf8_lossy(body);
-        let delimiter = format!("--{}", boundary);
-        for part in body_str.split(&delimiter) {
-            let trimmed = part.trim_start_matches("\r\n");
-            if trimmed.is_empty() || trimmed.starts_with("--") {
-                continue;
-            }
-            let Some((raw_headers, raw_val)) = trimmed.split_once("\r\n\r\n") else {
-                continue;
-            };
-            let Some(name_start) = raw_headers.find("name=\"") else {
-                continue;
-            };
-            let rest = &raw_headers[name_start + 6..];
-            let Some(name_end) = rest.find('"') else {
-                continue;
-            };
-            let name = &rest[..name_end];
-            let val = raw_val.strip_suffix("\r\n").unwrap_or(raw_val);
-            fields.insert(name.to_string(), val.to_string());
-        }
-        fields
+        String::from_utf8_lossy(body)
+            .split(&format!("--{}", boundary))
+            .filter_map(|part| {
+                let trimmed = part.trim_start_matches("\r\n");
+                if trimmed.is_empty() || trimmed.starts_with("--") {
+                    return None;
+                }
+                let (raw_headers, raw_val) = trimmed.split_once("\r\n\r\n")?;
+                let rest = &raw_headers[raw_headers.find("name=\"")? + 6..];
+                let name = &rest[..rest.find('"')?];
+                let val = raw_val.strip_suffix("\r\n").unwrap_or(raw_val);
+                Some((name.to_string(), val.to_string()))
+            })
+            .collect()
     }
 
     fn parse_form_urlencoded(body: &Bytes) -> HashMap<String, String> {
@@ -631,121 +493,115 @@ mod tests {
         (router, state, api_key, db)
     }
 
+    fn mock_file_json(
+        index: usize,
+        name: &str,
+        size: u64,
+        progress: f64,
+        priority: u8,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "index": index,
+            "name": name,
+            "size": size,
+            "progress": progress,
+            "priority": priority,
+        })
+    }
+
+    fn mock_torrent_json(
+        hash: &str,
+        tags: &str,
+        name: &str,
+        size: u64,
+        progress: f64,
+        state: &str,
+        dlspeed: u64,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "hash": hash,
+            "tags": tags,
+            "name": name,
+            "size": size,
+            "progress": progress,
+            "state": state,
+            "added_on": 1_700_000_000u64,
+            "dlspeed": dlspeed,
+            "upspeed": 0u64,
+            "eta": 60i64,
+        })
+    }
+
     fn season_pack_files_json(
         ep1_priority: u8,
         ep1_progress: f64,
         ep2_priority: u8,
     ) -> Vec<serde_json::Value> {
         vec![
-            serde_json::json!({
-                "index": 0,
-                "name": "Breaking.Bad.S01.1080p/Breaking.Bad.S01E01.mkv",
-                "size": GB,
-                "progress": ep1_progress,
-                "priority": ep1_priority,
-            }),
-            serde_json::json!({
-                "index": 1,
-                "name": "Breaking.Bad.S01.1080p/Breaking.Bad.S01E02.mkv",
-                "size": GB,
-                "progress": 0.0,
-                "priority": ep2_priority,
-            }),
-            serde_json::json!({
-                "index": 2,
-                "name": "Breaking.Bad.S01.1080p/Breaking.Bad.S01E03.mkv",
-                "size": GB,
-                "progress": 0.0,
-                "priority": 0,
-            }),
+            mock_file_json(
+                0,
+                "Breaking.Bad.S01.1080p/Breaking.Bad.S01E01.mkv",
+                GB,
+                ep1_progress,
+                ep1_priority,
+            ),
+            mock_file_json(
+                1,
+                "Breaking.Bad.S01.1080p/Breaking.Bad.S01E02.mkv",
+                GB,
+                0.0,
+                ep2_priority,
+            ),
+            mock_file_json(
+                2,
+                "Breaking.Bad.S01.1080p/Breaking.Bad.S01E03.mkv",
+                GB,
+                0.0,
+                0,
+            ),
         ]
     }
 
-    #[test]
-    fn stream_readiness_thresholds() {
-        assert!(!is_file_stream_ready(GB, 0.0));
-        assert!(is_file_stream_ready(GB, 1.0));
-
-        // Small file (10 MB): requires >= 20%
-        assert!(!is_file_stream_ready(10 * MB, 0.05));
-        assert!(is_file_stream_ready(10 * MB, 0.25));
-
-        // Medium file (1 GB): requires >= 20 MB AND >= 3%
-        assert!(!is_file_stream_ready(GB, 0.01));
-        assert!(!is_file_stream_ready(GB, 0.025));
-        assert!(is_file_stream_ready(GB, 0.03));
-
-        // Large file (20 GB): 0.1% = ~20 MB (< 1% so not ready); 1.2% = ~245 MB (>= 64 MB cap & >= 1%)
-        assert!(!is_file_stream_ready(20 * GB, 0.001));
-        assert!(is_file_stream_ready(20 * GB, 0.012));
+    fn play_uri(
+        api_key: &str,
+        stremio_id: &str,
+        hash: &str,
+        file_idx: usize,
+        file_path: &str,
+        extra: &str,
+    ) -> String {
+        format!(
+            "/{}/play-file/{}/{}?fileIdx={}&filePath={}{}",
+            api_key,
+            stremio_id,
+            hash,
+            file_idx,
+            urlencoding::encode(file_path),
+            extra
+        )
     }
 
-    #[test]
-    fn stalled_torrent_detection() {
-        assert!(is_torrent_stalled("stalledDL", 0));
-        assert!(is_torrent_stalled("metaDL", 0));
-        assert!(is_torrent_stalled("error", 0));
-        assert!(is_torrent_stalled("missingFiles", 0));
-        assert!(!is_torrent_stalled("downloading", 0));
-        assert!(!is_torrent_stalled("stalledDL", 1024));
-        assert!(!is_torrent_stalled("uploading", 0));
+    async fn get_redirect_location(app: Router, uri: &str) -> String {
+        let res = app
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT);
+        res.headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string()
     }
 
-    #[test]
-    fn placeholder_decisions_cover_all_states() {
-        // First click on unrequested episode -> EpisodeRequested
-        assert_eq!(
-            decide_play_placeholder(false, Some(0), GB, 0.0, true, false, false),
-            Some(PlaceholderState::EpisodeRequested)
-        );
-
-        // Second click on same episode in session -> Buffering(0) (or Stalled if stalled)
-        assert_eq!(
-            decide_play_placeholder(false, Some(0), GB, 0.0, true, true, false),
-            Some(PlaceholderState::Buffering(0))
-        );
-        assert_eq!(
-            decide_play_placeholder(false, Some(0), GB, 0.0, true, true, true),
-            Some(PlaceholderState::Stalled)
-        );
-
-        // Actively downloading file below threshold -> Buffering(pct)
-        assert_eq!(
-            decide_play_placeholder(true, Some(1), GB, 0.01, false, false, false),
-            Some(PlaceholderState::Buffering(1))
-        );
-
-        // Stalled torrent below threshold -> Stalled
-        assert_eq!(
-            decide_play_placeholder(true, Some(1), GB, 0.01, false, false, true),
-            Some(PlaceholderState::Stalled)
-        );
-
-        // Ready file on disk -> None (redirect to direct stream)
-        assert_eq!(
-            decide_play_placeholder(true, Some(1), GB, 0.05, false, false, false),
-            None
-        );
-
-        // Ready in qBit (80% or 5% of 1 GB) but file missing on disk -> FilesMissing
-        assert_eq!(
-            decide_play_placeholder(false, Some(1), GB, 0.80, false, false, false),
-            Some(PlaceholderState::FilesMissing)
-        );
-        assert_eq!(
-            decide_play_placeholder(false, Some(1), GB, 0.05, false, false, false),
-            Some(PlaceholderState::FilesMissing)
-        );
-        // Below ready threshold (1% of 1 GB) and missing on disk -> Buffering(1)
-        assert_eq!(
-            decide_play_placeholder(false, Some(1), GB, 0.01, false, false, false),
-            Some(PlaceholderState::Buffering(1))
-        );
-        // On disk at 12% of 100 MB (below 20 MB ready threshold) -> Buffering(9)
-        assert_eq!(
-            decide_play_placeholder(true, Some(1), 100 * MB, 0.12, false, false, false),
-            Some(PlaceholderState::Buffering(9))
-        );
+    async fn wait_for_add_tags(mock: &MockQbitState) {
+        mock.wait_for(|calls| {
+            calls
+                .iter()
+                .any(|c| matches!(c, MockQbitCall::AddTags { .. }))
+        })
+        .await;
     }
 
     #[test]
@@ -770,60 +626,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn select_next_episode_respects_priority_type_and_qbit_file_index() {
-        let files = vec![
-            QbitFile {
-                index: Some(0),
-                name: "Show.S01/readme.txt".to_string(),
-                size: 100,
-                progress: 0.0,
-                priority: 0,
-            },
-            QbitFile {
-                index: Some(10),
-                name: "Show.S01/Show.S01E01.mkv".to_string(),
-                size: GB,
-                progress: 1.0,
-                priority: 1,
-            },
-            QbitFile {
-                index: Some(15),
-                name: "Show.S01/Show.S01E02.mkv".to_string(),
-                size: GB,
-                progress: 0.0,
-                priority: 0,
-            },
-        ];
-
-        assert_eq!(
-            select_next_episode_to_prefetch("tt0903747:1:1", Some("Show.S01"), &files, 1),
-            Some(NextEpisodePrefetch {
-                file_id: 15,
-                file_path: "Show.S01/Show.S01E02.mkv".to_string(),
-                season: 1,
-                episode: 2,
-            })
-        );
-
-        let mut already_requested = files.clone();
-        already_requested[2].priority = 1;
-        assert_eq!(
-            select_next_episode_to_prefetch(
-                "tt0903747:1:1",
-                Some("Show.S01"),
-                &already_requested,
-                1
-            ),
-            None
-        );
-
-        assert_eq!(
-            select_next_episode_to_prefetch("tt1375666", Some("Show.S01"), &files, 1),
-            None
-        );
-    }
-
     #[tokio::test]
     async fn full_season_play_ready_downloading_prefetches_next_and_prioritizes_current() {
         let hash = "aaaa1111bbbb2222cccc3333dddd4444eeee5555";
@@ -834,48 +636,28 @@ mod tests {
         let mut files_map = HashMap::new();
         files_map.insert(hash.to_string(), season_pack_files_json(1, 0.05, 0));
         let mock = MockQbitState::new(
-            vec![serde_json::json!({
-                "hash": hash,
-                "tags": "tt0903747,series",
-                "name": "Breaking.Bad.S01.1080p",
-                "size": 3 * GB,
-                "progress": 0.02,
-                "state": "downloading",
-                "added_on": 1_700_000_000u64,
-                "dlspeed": 5_000_000u64,
-                "upspeed": 0u64,
-                "eta": 60i64,
-            })],
+            vec![mock_torrent_json(
+                hash,
+                "tt0903747,series",
+                "Breaking.Bad.S01.1080p",
+                3 * GB,
+                0.02,
+                "downloading",
+                5_000_000,
+            )],
             files_map,
         );
         let qbit_url = spawn_mock_qbit(mock.clone()).await;
         let (app, state, api_key, db) = build_test_app(qbit_url, dir.0.to_str().unwrap());
 
-        let uri = format!(
-            "/{}/play-file/tt0903747:1:1/{}?fileIdx=0&filePath={}",
-            api_key,
-            hash,
-            urlencoding::encode(ep1_path)
-        );
-        let res = app
-            .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT);
-        let loc = res
-            .headers()
-            .get(header::LOCATION)
-            .unwrap()
-            .to_str()
-            .unwrap();
+        let loc = get_redirect_location(
+            app,
+            &play_uri(&api_key, "tt0903747:1:1", hash, 0, ep1_path, ""),
+        )
+        .await;
         assert!(loc.contains("/stream-file/"), "unexpected location: {loc}");
 
-        mock.wait_for(|calls| {
-            calls
-                .iter()
-                .any(|c| matches!(c, MockQbitCall::AddTags { .. }))
-        })
-        .await;
+        wait_for_add_tags(&mock).await;
 
         let calls = mock.recorded_calls();
         assert!(calls.contains(&MockQbitCall::FilePrio {
@@ -922,41 +704,26 @@ mod tests {
         let mut files_map = HashMap::new();
         files_map.insert(hash.to_string(), season_pack_files_json(1, 1.0, 0));
         let mock = MockQbitState::new(
-            vec![serde_json::json!({
-                "hash": hash,
-                "tags": "tt0903747,series",
-                "name": "Breaking.Bad.S01.1080p",
-                "size": 3 * GB,
-                "progress": 0.33,
-                "state": "uploading",
-                "added_on": 1_700_000_000u64,
-                "dlspeed": 0u64,
-                "upspeed": 0u64,
-                "eta": 0i64,
-            })],
+            vec![mock_torrent_json(
+                hash,
+                "tt0903747,series",
+                "Breaking.Bad.S01.1080p",
+                3 * GB,
+                0.33,
+                "uploading",
+                0,
+            )],
             files_map,
         );
         let qbit_url = spawn_mock_qbit(mock.clone()).await;
         let (app, _state, api_key, _db) = build_test_app(qbit_url, dir.0.to_str().unwrap());
 
-        let uri = format!(
-            "/{}/play-file/tt0903747:1:1/{}?fileIdx=0&filePath={}",
-            api_key,
-            hash,
-            urlencoding::encode(ep1_path)
-        );
-        let res = app
-            .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT);
-
-        mock.wait_for(|calls| {
-            calls
-                .iter()
-                .any(|c| matches!(c, MockQbitCall::AddTags { .. }))
-        })
+        get_redirect_location(
+            app,
+            &play_uri(&api_key, "tt0903747:1:1", hash, 0, ep1_path, ""),
+        )
         .await;
+        wait_for_add_tags(&mock).await;
 
         let calls = mock.recorded_calls();
         assert!(calls.contains(&MockQbitCall::FilePrio {
@@ -980,51 +747,38 @@ mod tests {
         let mut files_map = HashMap::new();
         files_map.insert(hash.to_string(), season_pack_files_json(0, 0.0, 0));
         let mock = MockQbitState::new(
-            vec![serde_json::json!({
-                "hash": hash,
-                "tags": "tt0903747,series",
-                "name": "Breaking.Bad.S01.1080p",
-                "size": 3 * GB,
-                "progress": 0.0,
-                "state": "stoppedDL",
-                "added_on": 1_700_000_000u64,
-                "dlspeed": 0u64,
-                "upspeed": 0u64,
-                "eta": 0i64,
-            })],
+            vec![mock_torrent_json(
+                hash,
+                "tt0903747,series",
+                "Breaking.Bad.S01.1080p",
+                3 * GB,
+                0.0,
+                "stoppedDL",
+                0,
+            )],
             files_map,
         );
         let qbit_url = spawn_mock_qbit(mock.clone()).await;
         let (app, _state, api_key, _db) = build_test_app(qbit_url, dir.0.to_str().unwrap());
 
-        let uri = format!(
-            "/{}/play-file/tt0903747:1:1/{}?fileIdx=0&filePath={}&unrequested=1",
-            api_key,
-            hash,
-            urlencoding::encode(ep1_path)
-        );
-        let res = app
-            .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT);
-        let loc = res
-            .headers()
-            .get(header::LOCATION)
-            .unwrap()
-            .to_str()
-            .unwrap();
+        let loc = get_redirect_location(
+            app,
+            &play_uri(
+                &api_key,
+                "tt0903747:1:1",
+                hash,
+                0,
+                ep1_path,
+                "&unrequested=1",
+            ),
+        )
+        .await;
         assert!(
             loc.contains("/placeholder-live/play/") && loc.contains("initial=episode_requested"),
             "unexpected location: {loc}"
         );
 
-        mock.wait_for(|calls| {
-            calls
-                .iter()
-                .any(|c| matches!(c, MockQbitCall::AddTags { .. }))
-        })
-        .await;
+        wait_for_add_tags(&mock).await;
 
         let calls = mock.recorded_calls();
         assert!(calls.contains(&MockQbitCall::FilePrio {
@@ -1048,51 +802,31 @@ mod tests {
         let mut files_map = HashMap::new();
         files_map.insert(hash.to_string(), season_pack_files_json(1, 0.01, 0));
         let mock = MockQbitState::new(
-            vec![serde_json::json!({
-                "hash": hash,
-                "tags": "tt0903747,series",
-                "name": "Breaking.Bad.S01.1080p",
-                "size": 3 * GB,
-                "progress": 0.005,
-                "state": "downloading",
-                "added_on": 1_700_000_000u64,
-                "dlspeed": 1_000_000u64,
-                "upspeed": 0u64,
-                "eta": 300i64,
-            })],
+            vec![mock_torrent_json(
+                hash,
+                "tt0903747,series",
+                "Breaking.Bad.S01.1080p",
+                3 * GB,
+                0.005,
+                "downloading",
+                1_000_000,
+            )],
             files_map,
         );
         let qbit_url = spawn_mock_qbit(mock.clone()).await;
         let (app, _state, api_key, _db) = build_test_app(qbit_url, dir.0.to_str().unwrap());
 
-        let uri = format!(
-            "/{}/play-file/tt0903747:1:1/{}?fileIdx=0&filePath={}",
-            api_key,
-            hash,
-            urlencoding::encode(ep1_path)
-        );
-        let res = app
-            .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT);
-        let loc = res
-            .headers()
-            .get(header::LOCATION)
-            .unwrap()
-            .to_str()
-            .unwrap();
+        let loc = get_redirect_location(
+            app,
+            &play_uri(&api_key, "tt0903747:1:1", hash, 0, ep1_path, ""),
+        )
+        .await;
         assert!(
             loc.contains("/placeholder-live/play/") && loc.contains("initial=buffering_1"),
             "unexpected location: {loc}"
         );
 
-        mock.wait_for(|calls| {
-            calls
-                .iter()
-                .any(|c| matches!(c, MockQbitCall::AddTags { .. }))
-        })
-        .await;
+        wait_for_add_tags(&mock).await;
 
         let calls = mock.recorded_calls();
         assert!(calls.contains(&MockQbitCall::FilePrio {
@@ -1124,17 +858,7 @@ mod tests {
             hash,
             urlencoding::encode(&magnet)
         );
-        let res = app
-            .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT);
-        let loc = res
-            .headers()
-            .get(header::LOCATION)
-            .unwrap()
-            .to_str()
-            .unwrap();
+        let loc = get_redirect_location(app, &uri).await;
         assert!(
             loc.contains("/placeholder-live/trigger/"),
             "unexpected location: {loc}"
@@ -1181,50 +905,29 @@ mod tests {
             files[2]["progress"] = serde_json::json!(1.0);
         }
         let mock_finale = MockQbitState::new(
-            vec![serde_json::json!({
-                "hash": hash,
-                "tags": "tt0903747,series",
-                "name": "Breaking.Bad.S01.1080p",
-                "size": 3 * GB,
-                "progress": 1.0,
-                "state": "uploading",
-                "added_on": 1_700_000_000u64,
-                "dlspeed": 0u64,
-                "upspeed": 0u64,
-                "eta": 0i64,
-            })],
+            vec![mock_torrent_json(
+                hash,
+                "tt0903747,series",
+                "Breaking.Bad.S01.1080p",
+                3 * GB,
+                1.0,
+                "uploading",
+                0,
+            )],
             files_map,
         );
         let qbit_url_1 = spawn_mock_qbit(mock_finale.clone()).await;
         let (app_1, _state_1, api_key_1, _db_1) =
             build_test_app(qbit_url_1, dir.0.to_str().unwrap());
 
-        let uri_finale = format!(
-            "/{}/play-file/tt0903747:1:3/{}?fileIdx=2&filePath={}",
-            api_key_1,
-            hash,
-            urlencoding::encode(ep3_path)
-        );
-        let res_finale = app_1
-            .oneshot(
-                Request::builder()
-                    .uri(&uri_finale)
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(res_finale.status(), StatusCode::TEMPORARY_REDIRECT);
-        mock_finale
-            .wait_for(|calls| {
-                calls
-                    .iter()
-                    .any(|c| matches!(c, MockQbitCall::AddTags { .. }))
-            })
-            .await;
+        get_redirect_location(
+            app_1,
+            &play_uri(&api_key_1, "tt0903747:1:3", hash, 2, ep3_path, ""),
+        )
+        .await;
+        wait_for_add_tags(&mock_finale).await;
 
-        let finale_calls = mock_finale.recorded_calls();
-        assert!(!finale_calls.iter().any(|c| matches!(
+        assert!(!mock_finale.recorded_calls().iter().any(|c| matches!(
             c,
             MockQbitCall::FilePrio { ids, .. } if ids != "2"
         )));
@@ -1233,50 +936,29 @@ mod tests {
         let mut files_map_2 = HashMap::new();
         files_map_2.insert(hash.to_string(), season_pack_files_json(1, 1.0, 1));
         let mock_no_cascade = MockQbitState::new(
-            vec![serde_json::json!({
-                "hash": hash,
-                "tags": "tt0903747,series",
-                "name": "Breaking.Bad.S01.1080p",
-                "size": 3 * GB,
-                "progress": 0.5,
-                "state": "downloading",
-                "added_on": 1_700_000_000u64,
-                "dlspeed": 1_000_000u64,
-                "upspeed": 0u64,
-                "eta": 60i64,
-            })],
+            vec![mock_torrent_json(
+                hash,
+                "tt0903747,series",
+                "Breaking.Bad.S01.1080p",
+                3 * GB,
+                0.5,
+                "downloading",
+                1_000_000,
+            )],
             files_map_2,
         );
         let qbit_url_2 = spawn_mock_qbit(mock_no_cascade.clone()).await;
         let (app_2, _state_2, api_key_2, _db_2) =
             build_test_app(qbit_url_2, dir.0.to_str().unwrap());
 
-        let uri_ep1 = format!(
-            "/{}/play-file/tt0903747:1:1/{}?fileIdx=0&filePath={}",
-            api_key_2,
-            hash,
-            urlencoding::encode(ep1_path)
-        );
-        let res_ep1 = app_2
-            .oneshot(
-                Request::builder()
-                    .uri(&uri_ep1)
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(res_ep1.status(), StatusCode::TEMPORARY_REDIRECT);
-        mock_no_cascade
-            .wait_for(|calls| {
-                calls
-                    .iter()
-                    .any(|c| matches!(c, MockQbitCall::AddTags { .. }))
-            })
-            .await;
+        get_redirect_location(
+            app_2,
+            &play_uri(&api_key_2, "tt0903747:1:1", hash, 0, ep1_path, ""),
+        )
+        .await;
+        wait_for_add_tags(&mock_no_cascade).await;
 
-        let no_cascade_calls = mock_no_cascade.recorded_calls();
-        assert!(!no_cascade_calls.iter().any(|c| matches!(
+        assert!(!mock_no_cascade.recorded_calls().iter().any(|c| matches!(
             c,
             MockQbitCall::FilePrio { ids, .. } if ids != "0"
         )));
@@ -1297,108 +979,67 @@ mod tests {
         files_map.insert(
             single_hash.to_string(),
             vec![
-                serde_json::json!({
-                    "index": 0,
-                    "name": single_ep_path,
-                    "size": GB,
-                    "progress": 1.0,
-                    "priority": 1,
-                }),
-                serde_json::json!({
-                    "index": 1,
-                    "name": "Breaking.Bad.S01E01.1080p/Sample/sample.mkv",
-                    "size": 25 * MB,
-                    "progress": 0.0,
-                    "priority": 0,
-                }),
+                mock_file_json(0, single_ep_path, GB, 1.0, 1),
+                mock_file_json(
+                    1,
+                    "Breaking.Bad.S01E01.1080p/Sample/sample.mkv",
+                    25 * MB,
+                    0.0,
+                    0,
+                ),
             ],
         );
         files_map.insert(
             movie_hash.to_string(),
             vec![
-                serde_json::json!({
-                    "index": 0,
-                    "name": movie_path,
-                    "size": 2 * GB,
-                    "progress": 1.0,
-                    "priority": 1,
-                }),
-                serde_json::json!({
-                    "index": 1,
-                    "name": "Inception.2010.1080p/Sample/sample.mkv",
-                    "size": 25 * MB,
-                    "progress": 0.0,
-                    "priority": 0,
-                }),
+                mock_file_json(0, movie_path, 2 * GB, 1.0, 1),
+                mock_file_json(1, "Inception.2010.1080p/Sample/sample.mkv", 25 * MB, 0.0, 0),
             ],
         );
 
         let mock = MockQbitState::new(
             vec![
-                serde_json::json!({
-                    "hash": single_hash,
-                    "tags": "tt0903747,series",
-                    "name": "Breaking.Bad.S01E01.1080p",
-                    "size": GB,
-                    "progress": 1.0,
-                    "state": "uploading",
-                    "added_on": 1_700_000_000u64,
-                    "dlspeed": 0u64,
-                    "upspeed": 0u64,
-                    "eta": 0i64,
-                }),
-                serde_json::json!({
-                    "hash": movie_hash,
-                    "tags": "tt1375666,movie",
-                    "name": "Inception.2010.1080p",
-                    "size": 2 * GB,
-                    "progress": 1.0,
-                    "state": "uploading",
-                    "added_on": 1_700_000_000u64,
-                    "dlspeed": 0u64,
-                    "upspeed": 0u64,
-                    "eta": 0i64,
-                }),
+                mock_torrent_json(
+                    single_hash,
+                    "tt0903747,series",
+                    "Breaking.Bad.S01E01.1080p",
+                    GB,
+                    1.0,
+                    "uploading",
+                    0,
+                ),
+                mock_torrent_json(
+                    movie_hash,
+                    "tt1375666,movie",
+                    "Inception.2010.1080p",
+                    2 * GB,
+                    1.0,
+                    "uploading",
+                    0,
+                ),
             ],
             files_map,
         );
         let qbit_url = spawn_mock_qbit(mock.clone()).await;
         let (app, _state, api_key, _db) = build_test_app(qbit_url, dir.0.to_str().unwrap());
 
-        let single_uri = format!(
-            "/{}/play-file/tt0903747:1:1/{}?fileIdx=0&filePath={}",
-            api_key,
-            single_hash,
-            urlencoding::encode(single_ep_path)
-        );
-        let res_single = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(&single_uri)
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(res_single.status(), StatusCode::TEMPORARY_REDIRECT);
-
-        let movie_uri = format!(
-            "/{}/play-file/tt1375666/{}?fileIdx=0&filePath={}",
-            api_key,
-            movie_hash,
-            urlencoding::encode(movie_path)
-        );
-        let res_movie = app
-            .oneshot(
-                Request::builder()
-                    .uri(&movie_uri)
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(res_movie.status(), StatusCode::TEMPORARY_REDIRECT);
+        get_redirect_location(
+            app.clone(),
+            &play_uri(
+                &api_key,
+                "tt0903747:1:1",
+                single_hash,
+                0,
+                single_ep_path,
+                "",
+            ),
+        )
+        .await;
+        get_redirect_location(
+            app,
+            &play_uri(&api_key, "tt1375666", movie_hash, 0, movie_path, ""),
+        )
+        .await;
 
         mock.wait_for(|calls| {
             calls
@@ -1409,8 +1050,7 @@ mod tests {
         })
         .await;
 
-        let calls = mock.recorded_calls();
-        assert!(!calls.iter().any(|c| matches!(
+        assert!(!mock.recorded_calls().iter().any(|c| matches!(
             c,
             MockQbitCall::FilePrio { ids, .. } if ids != "0"
         )));

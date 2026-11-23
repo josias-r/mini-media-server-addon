@@ -3,9 +3,10 @@ use crate::cinemeta::{
     metahub_background_url, metahub_logo_url, metahub_poster_url, resolve_media_metadata,
 };
 use crate::db::{DbClient, MediaHistoryEntry, MediaMetadata};
+use crate::domain::parser::looks_like_series_name;
+use crate::domain::{format_episode_badge, parse_torrent_tags};
 use crate::models::{CatalogResponse, MetaPreview};
-use crate::parser::looks_like_series_name;
-use crate::qbittorrent::{QbitTorrent, parse_torrent_tags};
+use crate::qbittorrent::QbitTorrent;
 use axum::{
     extract::{Path, State},
     response::{IntoResponse, Json, Response},
@@ -27,16 +28,16 @@ fn strip_json_suffix(segment: &str) -> &str {
 }
 
 pub fn parse_skip_extra(extra: &str) -> usize {
-    let clean = strip_json_suffix(extra.trim());
-    for pair in clean.split('&') {
-        if let Some((k, v)) = pair.split_once('=')
-            && k.trim().eq_ignore_ascii_case("skip")
-            && let Ok(val) = v.trim().parse::<usize>()
-        {
-            return val;
-        }
-    }
-    0
+    strip_json_suffix(extra.trim())
+        .split('&')
+        .find_map(|pair| {
+            let (k, v) = pair.split_once('=')?;
+            k.trim()
+                .eq_ignore_ascii_case("skip")
+                .then(|| v.trim().parse().ok())
+                .flatten()
+        })
+        .unwrap_or(0)
 }
 
 fn resolve_catalog_target(
@@ -52,75 +53,59 @@ fn resolve_catalog_target(
     }
 }
 
-fn format_episode_badge(stremio_id: &str) -> Option<String> {
-    let parts: Vec<&str> = stremio_id.split(':').collect();
-    if parts.len() >= 3
-        && let (Ok(season), Ok(episode)) = (
-            parts[1].trim().parse::<u32>(),
-            parts[2].trim().parse::<u32>(),
-        )
-    {
-        return Some(format!("S{:02}E{:02}", season, episode));
-    }
-    None
-}
-
 pub fn build_meta_preview(entry: &MediaHistoryEntry, meta: Option<MediaMetadata>) -> MetaPreview {
-    let (name, poster, background, logo, mut description, mut release_info, imdb_rating) =
-        match meta {
-            Some(m) => (
-                m.name,
-                m.poster
-                    .or_else(|| Some(metahub_poster_url(&entry.imdb_id))),
-                m.background
-                    .or_else(|| Some(metahub_background_url(&entry.imdb_id))),
-                m.logo.or_else(|| Some(metahub_logo_url(&entry.imdb_id))),
-                m.description,
-                m.release_info,
-                m.imdb_rating,
-            ),
-            None => (
-                entry.imdb_id.clone(),
-                Some(metahub_poster_url(&entry.imdb_id)),
-                Some(metahub_background_url(&entry.imdb_id)),
-                Some(metahub_logo_url(&entry.imdb_id)),
-                None,
-                None,
-                None,
-            ),
-        };
+    let m = meta.unwrap_or_else(|| MediaMetadata {
+        imdb_id: entry.imdb_id.clone(),
+        media_type: entry.media_type.clone(),
+        name: entry.imdb_id.clone(),
+        poster: None,
+        background: None,
+        logo: None,
+        description: None,
+        release_info: None,
+        imdb_rating: None,
+    });
 
+    let (mut description, mut release_info) = (m.description, m.release_info);
     if entry.media_type == "series"
         && let Some(ep_badge) = format_episode_badge(&entry.latest_stremio_id)
     {
-        release_info = match release_info
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
-            Some(ri) => Some(format!("{} • Last: {}", ri, ep_badge)),
-            None => Some(format!("Last: {}", ep_badge)),
-        };
-        description = match description
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
-            Some(desc) => Some(format!("Last streamed: {}\n\n{}", ep_badge, desc)),
-            None => Some(format!("Last streamed: {}", ep_badge)),
-        };
+        release_info = Some(
+            release_info
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map_or_else(
+                    || format!("Last: {}", ep_badge),
+                    |ri| format!("{} • Last: {}", ri, ep_badge),
+                ),
+        );
+        description = Some(
+            description
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map_or_else(
+                    || format!("Last streamed: {}", ep_badge),
+                    |desc| format!("Last streamed: {}\n\n{}", ep_badge, desc),
+                ),
+        );
     }
 
     MetaPreview {
         id: entry.imdb_id.clone(),
         media_type: entry.media_type.clone(),
-        name,
-        poster,
-        background,
-        logo,
+        name: m.name,
+        poster: m
+            .poster
+            .or_else(|| Some(metahub_poster_url(&entry.imdb_id))),
+        background: m
+            .background
+            .or_else(|| Some(metahub_background_url(&entry.imdb_id))),
+        logo: m.logo.or_else(|| Some(metahub_logo_url(&entry.imdb_id))),
         description,
         release_info,
-        imdb_rating,
+        imdb_rating: m.imdb_rating,
         behavior_hints: None,
     }
 }

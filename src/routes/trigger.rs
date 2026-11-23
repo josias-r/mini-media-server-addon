@@ -1,7 +1,8 @@
 use super::{AppState, PlaceholderState, build_live_placeholder_redirect, require_valid_api_key};
-use crate::jackett::extract_btih_hex;
-use crate::matcher::find_best_file_match;
-use crate::qbittorrent::build_torrent_tags;
+use crate::domain::{
+    base_imdb_id, build_torrent_tags, extract_btih_hex, match_best_qbit_file, normalize_valid_hash,
+};
+use crate::placeholder::has_nonzero_range_header;
 use crate::stream_builder::get_series_params;
 use axum::{
     extract::{Path, Query, State},
@@ -10,15 +11,6 @@ use axum::{
 };
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
-
-fn normalize_valid_hash(hash: &str) -> Option<String> {
-    let trimmed = hash.trim();
-    if trimmed.len() == 40 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
-        Some(trimmed.to_lowercase())
-    } else {
-        None
-    }
-}
 
 fn build_trigger_key(
     valid_initial_hash: Option<&str>,
@@ -45,7 +37,7 @@ pub async fn trigger_download(
         return err;
     }
 
-    if crate::placeholder_stream::has_nonzero_range_header(&headers) {
+    if has_nonzero_range_header(&headers) {
         return build_live_placeholder_redirect(
             &state.config.public_url,
             &api_key,
@@ -59,13 +51,11 @@ pub async fn trigger_download(
     }
 
     let valid_initial_hash = normalize_valid_hash(&info_hash);
-    if let Some(ref h) = valid_initial_hash {
-        let _ = state.db.record_media_watch(&api_key, &stremio_id, h);
-    } else {
-        let _ = state
-            .db
-            .record_media_watch(&api_key, &stremio_id, "unknown");
-    }
+    let _ = state.db.record_media_watch(
+        &api_key,
+        &stremio_id,
+        valid_initial_hash.as_deref().unwrap_or("unknown"),
+    );
 
     let magnet_opt = params.get("magnet").cloned();
     let trigger_key = build_trigger_key(
@@ -88,11 +78,7 @@ pub async fn trigger_download(
     let initial_hash_clone = valid_initial_hash.clone();
 
     tokio::spawn(async move {
-        let base_id = task_stremio_id
-            .split(':')
-            .next()
-            .unwrap_or(&task_stremio_id)
-            .to_string();
+        let base_id = base_imdb_id(&task_stremio_id).to_string();
 
         let mut existing_hashes = HashSet::new();
         if initial_hash_clone.is_none() {
@@ -160,10 +146,8 @@ pub async fn trigger_download(
                 let (is_series, season, episode, expected_title) =
                     get_series_params(&task_state, &task_stremio_id).await;
 
-                let file_infos: Vec<(&str, u64)> =
-                    files.iter().map(|f| (f.name.as_str(), f.size)).collect();
                 let best_idx =
-                    find_best_file_match(&file_infos, &expected_title, is_series, season, episode);
+                    match_best_qbit_file(&files, &expected_title, is_series, season, episode);
 
                 if let Some(chosen_idx) = best_idx {
                     let chosen_id = files[chosen_idx].index.unwrap_or(chosen_idx);
