@@ -1105,4 +1105,97 @@ mod tests {
             priority: "1".to_string(),
         }));
     }
+
+    #[tokio::test]
+    async fn trigger_download_preserves_in_progress_and_existing_files() {
+        let hash_partial = "444455556666777788889999aaaabbbbccccdddd";
+        let dir = TempDir::new("trigger_preserve");
+
+        // Case 1: file 1 already has progress > 0.0 while file 2 has progress 0.0
+        let mut files_map = HashMap::new();
+        files_map.insert(
+            hash_partial.to_string(),
+            vec![
+                mock_file_json(
+                    0,
+                    "Breaking.Bad.S01.1080p/Breaking.Bad.S01E01.mkv",
+                    GB,
+                    0.0,
+                    1,
+                ),
+                mock_file_json(
+                    1,
+                    "Breaking.Bad.S01.1080p/Breaking.Bad.S01E02.mkv",
+                    GB,
+                    0.25,
+                    1,
+                ),
+                mock_file_json(
+                    2,
+                    "Breaking.Bad.S01.1080p/Breaking.Bad.S01E03.mkv",
+                    GB,
+                    0.0,
+                    1,
+                ),
+            ],
+        );
+        let mock = MockQbitState::new(vec![], files_map);
+        let qbit_url = spawn_mock_qbit(mock.clone()).await;
+        let (app, _state, api_key, _db) = build_test_app(qbit_url, dir.0.to_str().unwrap());
+
+        let magnet = format!("magnet:?xt=urn:btih:{}", hash_partial);
+        let uri = format!(
+            "/{}/trigger-download/tt0903747:1:1/{}?magnet={}",
+            api_key,
+            hash_partial,
+            urlencoding::encode(&magnet)
+        );
+        get_redirect_location(app.clone(), &uri).await;
+        mock.wait_for(|calls| {
+            calls
+                .iter()
+                .any(|c| matches!(c, MockQbitCall::Start { .. }))
+        })
+        .await;
+
+        let calls = mock.recorded_calls();
+        assert!(calls.contains(&MockQbitCall::FilePrio {
+            hash: hash_partial.to_string(),
+            ids: "2".to_string(),
+            priority: "0".to_string(),
+        }));
+        assert!(!calls.iter().any(|c| matches!(
+            c,
+            MockQbitCall::FilePrio { ids, priority, .. } if ids.contains('1') && priority == "0"
+        )));
+
+        // Case 2: &existing=1 never zeroes out any files
+        let hash_existing = "55556666777788889999aaaabbbbccccddddeeee";
+        let mut files_map_2 = HashMap::new();
+        files_map_2.insert(hash_existing.to_string(), season_pack_files_json(1, 0.0, 1));
+        let mock_existing = MockQbitState::new(vec![], files_map_2);
+        let qbit_url_2 = spawn_mock_qbit(mock_existing.clone()).await;
+        let (app_2, _state_2, api_key_2, _db_2) =
+            build_test_app(qbit_url_2, dir.0.to_str().unwrap());
+
+        let uri_existing = format!(
+            "/{}/trigger-download/tt0903747:1:1/{}?magnet={}&existing=1",
+            api_key_2,
+            hash_existing,
+            urlencoding::encode(&format!("magnet:?xt=urn:btih:{}", hash_existing))
+        );
+        get_redirect_location(app_2, &uri_existing).await;
+        mock_existing
+            .wait_for(|calls| {
+                calls
+                    .iter()
+                    .any(|c| matches!(c, MockQbitCall::Start { .. }))
+            })
+            .await;
+
+        assert!(!mock_existing.recorded_calls().iter().any(|c| matches!(
+            c,
+            MockQbitCall::FilePrio { priority, .. } if priority == "0"
+        )));
+    }
 }

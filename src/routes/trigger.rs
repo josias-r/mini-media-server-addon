@@ -151,18 +151,20 @@ pub async fn trigger_download(
 
                 if let Some(chosen_idx) = best_idx {
                     let chosen_id = files[chosen_idx].index.unwrap_or(chosen_idx);
-                    let unwanted_ids: Vec<usize> = files
-                        .iter()
-                        .enumerate()
-                        .filter(|&(i, _)| i != chosen_idx)
-                        .map(|(i, f)| f.index.unwrap_or(i))
-                        .collect();
+                    if !already_existing {
+                        let unwanted_ids: Vec<usize> = files
+                            .iter()
+                            .enumerate()
+                            .filter(|&(i, f)| i != chosen_idx && f.progress == 0.0)
+                            .map(|(i, f)| f.index.unwrap_or(i))
+                            .collect();
 
-                    if !unwanted_ids.is_empty() {
-                        task_state
-                            .qbit
-                            .set_file_priorities(h, &unwanted_ids, 0)
-                            .await;
+                        if !unwanted_ids.is_empty() {
+                            task_state
+                                .qbit
+                                .set_file_priorities(h, &unwanted_ids, 0)
+                                .await;
+                        }
                     }
                     task_state
                         .qbit
