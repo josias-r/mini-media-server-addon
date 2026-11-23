@@ -22,25 +22,24 @@ struct Meta {
     imdb_rating: Option<serde_json::Value>,
 }
 
-pub fn metahub_poster_url(imdb_id: &str) -> String {
+fn metahub_url(kind: &str, imdb_id: &str) -> String {
     format!(
-        "https://images.metahub.space/poster/medium/{}/img",
+        "https://images.metahub.space/{}/medium/{}/img",
+        kind,
         imdb_id.trim().to_lowercase()
     )
+}
+
+pub fn metahub_poster_url(imdb_id: &str) -> String {
+    metahub_url("poster", imdb_id)
 }
 
 pub fn metahub_background_url(imdb_id: &str) -> String {
-    format!(
-        "https://images.metahub.space/background/medium/{}/img",
-        imdb_id.trim().to_lowercase()
-    )
+    metahub_url("background", imdb_id)
 }
 
 pub fn metahub_logo_url(imdb_id: &str) -> String {
-    format!(
-        "https://images.metahub.space/logo/medium/{}/img",
-        imdb_id.trim().to_lowercase()
-    )
+    metahub_url("logo", imdb_id)
 }
 
 fn non_empty_string(opt: Option<String>) -> Option<String> {
