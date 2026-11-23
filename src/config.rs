@@ -1,5 +1,14 @@
+use crate::db::DbClient;
+use crate::placeholder::{DEFAULT_DURATION_HOURS, LiveSessionStore, PlaceholderBank};
+use crate::qbittorrent::QbitClient;
 use dotenvy::dotenv;
+use log::info;
+use reqwest::Client;
+use std::collections::HashSet;
 use std::env;
+use std::path::Path;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -17,7 +26,6 @@ pub struct Config {
 
 impl Config {
     pub fn load() -> Self {
-        // Load .env if it exists, silently ignore if it doesn't
         let _ = dotenv();
 
         Self {
@@ -37,6 +45,81 @@ impl Config {
             retention_days: load_retention_days(),
         }
     }
+
+    pub fn static_dir() -> String {
+        env::var("STATIC_DIR").unwrap_or_else(|_| "app/dist".to_string())
+    }
+
+    pub fn admin_password_from_env() -> Option<String> {
+        env::var("ADMIN_PASSWORD")
+            .ok()
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+    }
+}
+
+#[derive(Clone)]
+pub struct AppState {
+    pub config: Arc<Config>,
+    pub qbit: Arc<QbitClient>,
+    pub http_client: Client,
+    pub db: Arc<DbClient>,
+    pub admin_session_token: String,
+    pub triggered_torrents: Arc<RwLock<HashSet<String>>>,
+    pub placeholder_bank: Option<Arc<PlaceholderBank>>,
+    pub live_sessions: Arc<LiveSessionStore>,
+}
+
+impl AppState {
+    /// Initializes shared application state from loaded configuration.
+    pub fn from_config(config: Config) -> Self {
+        let qbit = QbitClient::new(config.clone());
+
+        let data_dir = env::var("DATA_DIR").unwrap_or_else(|_| ".".to_string());
+        let db = DbClient::new(&format!("{}/data.db", data_dir));
+        let _ = db.get_admin_password().unwrap();
+
+        let placeholders_dir =
+            env::var("PLACEHOLDERS_DIR").unwrap_or_else(|_| "placeholders".to_string());
+        let duration_hours = env::var("PLACEHOLDER_DURATION_HOURS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(DEFAULT_DURATION_HOURS);
+        let placeholder_bank = match PlaceholderBank::load(
+            Path::new(&placeholders_dir),
+            duration_hours,
+        ) {
+            Ok(bank) => {
+                info!(
+                    "Loaded virtual placeholder bank from {:?} (slot_size={} B, total_len={} MiB, fragments={})",
+                    placeholders_dir,
+                    bank.slot_size,
+                    bank.total_len / (1024 * 1024),
+                    bank.total_fragments
+                );
+                Some(Arc::new(bank))
+            }
+            Err(e) => {
+                log::warn!(
+                    "Could not load placeholder bank from {:?}: {}; falling back to static placeholder.mp4",
+                    placeholders_dir,
+                    e
+                );
+                None
+            }
+        };
+
+        Self {
+            config: Arc::new(config),
+            qbit: Arc::new(qbit),
+            http_client: Client::builder().build().unwrap(),
+            db: Arc::new(db),
+            admin_session_token: uuid::Uuid::new_v4().to_string(),
+            triggered_torrents: Arc::new(RwLock::new(HashSet::new())),
+            placeholder_bank,
+            live_sessions: Arc::new(LiveSessionStore::default()),
+        }
+    }
 }
 
 pub fn parse_retention_days_from(raw: Option<&str>) -> Result<u64, String> {
@@ -50,15 +133,12 @@ pub fn parse_retention_days_from(raw: Option<&str>) -> Result<u64, String> {
     }
 
     let lower = cleaned.to_ascii_lowercase();
-    let numeric_part = if let Some(prefix) = lower.strip_suffix("days") {
-        prefix.trim()
-    } else if let Some(prefix) = lower.strip_suffix("day") {
-        prefix.trim()
-    } else if let Some(prefix) = lower.strip_suffix('d') {
-        prefix.trim()
-    } else {
-        cleaned
-    };
+    let numeric_part = lower
+        .strip_suffix("days")
+        .or_else(|| lower.strip_suffix("day"))
+        .or_else(|| lower.strip_suffix('d'))
+        .map(str::trim)
+        .unwrap_or(cleaned);
 
     if numeric_part.is_empty() {
         return Err(raw_val.to_string());

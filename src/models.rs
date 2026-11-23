@@ -25,6 +25,21 @@ pub struct StreamResponse {
     pub streams: Vec<Stream>,
 }
 
+impl Stream {
+    pub fn from_url(name: String, title: String, url: String) -> Self {
+        Self {
+            name: Some(name),
+            title: Some(title),
+            url: Some(url),
+            description: None,
+            yt_id: None,
+            info_hash: None,
+            file_idx: None,
+            external_url: None,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct MetaBehaviorHints {
     #[serde(rename = "defaultVideoId", skip_serializing_if = "Option::is_none")]
