@@ -143,6 +143,8 @@ pub async fn check_jackett_health(client: &Client, config: &Config) -> bool {
     }
 }
 
+const JACKETT_TIMEOUT: Duration = Duration::from_secs(10);
+
 pub async fn fetch_jackett_results(
     client: &Client,
     config: &Config,
@@ -155,7 +157,7 @@ pub async fn fetch_jackett_results(
     );
 
     debug!("Fetching from Jackett: {}", url);
-    let response = match client.get(&url).send().await {
+    let response = match client.get(&url).timeout(JACKETT_TIMEOUT).send().await {
         Ok(r) if r.status().is_success() => r,
         Ok(r) => {
             error!("Jackett API responded with status: {}", r.status());

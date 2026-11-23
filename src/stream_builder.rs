@@ -7,6 +7,7 @@ use crate::domain::{base_imdb_id, match_best_qbit_file};
 use crate::jackett::{JackettResult, TorznabParams, fetch_jackett_results};
 use crate::models::{Stream, StreamResponse};
 
+use futures_util::future::join_all;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -23,11 +24,18 @@ pub async fn fetch_and_dedup_jackett_results(
     fetch_plans: &[TorznabParams],
     filter_fn: &Option<FilterFn>,
 ) -> Vec<JackettResult> {
+    let plan_results = join_all(
+        fetch_plans
+            .iter()
+            .map(|plan| fetch_jackett_results(&state.http_client, &state.config, plan)),
+    )
+    .await;
+
     let mut results = Vec::new();
     let mut seen = HashSet::new();
 
-    for plan in fetch_plans {
-        for r in fetch_jackett_results(&state.http_client, &state.config, plan).await {
+    for (plan, items) in fetch_plans.iter().zip(plan_results) {
+        for r in items {
             let key = r
                 .info_hash
                 .clone()
@@ -144,18 +152,25 @@ pub async fn build_stream_response(
     expected_title: &str,
 ) -> StreamResponse {
     let mut stream_items = Vec::new();
-    let results = fetch_and_dedup_jackett_results(state, &fetch_plans, &filter_fn).await;
-
     let base_id = base_imdb_id(stremio_id);
-    let tagged_torrents = state.qbit.get_torrents_by_tag(base_id).await;
+    let (results, tagged_torrents) = tokio::join!(
+        fetch_and_dedup_jackett_results(state, &fetch_plans, &filter_fn),
+        state.qbit.get_torrents_by_tag(base_id),
+    );
     let downloaded_hashes: HashSet<String> = tagged_torrents
         .iter()
         .map(|t| t.hash.to_lowercase())
         .collect();
     let mut torrents_with_metadata = HashSet::new();
 
-    for torrent in &tagged_torrents {
-        let files = state.qbit.get_torrent_files(&torrent.hash).await;
+    let torrent_files = join_all(
+        tagged_torrents
+            .iter()
+            .map(|t| state.qbit.get_torrent_files(&t.hash)),
+    )
+    .await;
+
+    for (torrent, files) in tagged_torrents.iter().zip(torrent_files) {
         if !files.is_empty() {
             torrents_with_metadata.insert(torrent.hash.to_lowercase());
         }
@@ -265,4 +280,180 @@ pub async fn get_series_params(state: &AppState, stremio_id: &str) -> (bool, u32
     let (season, episode, _, expected_title) =
         resolve_media_query(state, stremio_id, is_series).await;
     (is_series, season, episode, expected_title)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::db::DbClient;
+    use crate::placeholder::LiveSessionStore;
+    use crate::qbittorrent::QbitClient;
+    use axum::{
+        Router,
+        extract::Query,
+        http::{StatusCode, header},
+        routing::{get, post},
+    };
+    use std::collections::HashMap;
+    use tokio::sync::RwLock;
+
+    #[tokio::test]
+    async fn concurrent_jackett_and_qbit_queries_deduplicate_and_order_streams() {
+        let qbit_hash = "aaaa1111bbbb2222cccc3333dddd4444eeee5555";
+        let dup_hash = "bbbb1111cccc2222dddd3333eeee4444ffff5555";
+        let pack_hash = "cccc1111dddd2222eeee3333ffff4444aaaa5555";
+
+        let app = Router::new()
+            .route(
+                "/api/v2.0/indexers/all/results/torznab/api",
+                get(move |Query(params): Query<HashMap<String, String>>| async move {
+                    let t = params.get("t").map(String::as_str).unwrap_or("");
+                    if params.contains_key("ep") || t == "search" && params.get("q").is_some_and(|q| q.contains("E02")) {
+                        format!(
+                            r#"<rss><channel>
+                                <item>
+                                    <title>Show.S01E02.1080p.WEB-DL</title>
+                                    <size>1000000000</size>
+                                    <jackettindexer>TrackerA</jackettindexer>
+                                    <torznab:attr name="seeders" value="25"/>
+                                    <torznab:attr name="infohash" value="{dup_hash}"/>
+                                    <torznab:attr name="magneturl" value="magnet:?xt=urn:btih:{dup_hash}"/>
+                                </item>
+                                <item>
+                                    <title>Show.S01E02.720p.AlreadyInQbit</title>
+                                    <size>500000000</size>
+                                    <jackettindexer>TrackerA</jackettindexer>
+                                    <torznab:attr name="seeders" value="99"/>
+                                    <torznab:attr name="infohash" value="{qbit_hash}"/>
+                                    <torznab:attr name="magneturl" value="magnet:?xt=urn:btih:{qbit_hash}"/>
+                                </item>
+                            </channel></rss>"#
+                        )
+                    } else {
+                        format!(
+                            r#"<rss><channel>
+                                <item>
+                                    <title>Show.S01.COMPLETE.1080p</title>
+                                    <size>9000000000</size>
+                                    <jackettindexer>TrackerB</jackettindexer>
+                                    <torznab:attr name="seeders" value="50"/>
+                                    <torznab:attr name="infohash" value="{pack_hash}"/>
+                                    <torznab:attr name="magneturl" value="magnet:?xt=urn:btih:{pack_hash}"/>
+                                </item>
+                                <item>
+                                    <title>Show.S01E02.Duplicate.From.SeasonSearch</title>
+                                    <size>1000000000</size>
+                                    <jackettindexer>TrackerB</jackettindexer>
+                                    <torznab:attr name="seeders" value="10"/>
+                                    <torznab:attr name="infohash" value="{dup_hash}"/>
+                                    <torznab:attr name="magneturl" value="magnet:?xt=urn:btih:{dup_hash}"/>
+                                </item>
+                            </channel></rss>"#
+                        )
+                    }
+                }),
+            )
+            .route(
+                "/api/v2/auth/login",
+                post(|| async {
+                    (
+                        StatusCode::OK,
+                        [(header::SET_COOKIE, "SID=mock-sid; Path=/")],
+                        "Ok.",
+                    )
+                }),
+            )
+            .route(
+                "/api/v2/torrents/info",
+                get(move || async move {
+                    axum::Json(vec![serde_json::json!({
+                        "hash": qbit_hash,
+                        "tags": "tt0903747,series",
+                        "name": "Show.S01",
+                        "size": 2_000_000_000u64,
+                        "progress": 0.5,
+                        "state": "downloading",
+                        "added_on": 1_700_000_000u64,
+                        "dlspeed": 0u64,
+                        "upspeed": 0u64,
+                        "eta": 0i64,
+                    })])
+                }),
+            )
+            .route(
+                "/api/v2/torrents/files",
+                get(|| async {
+                    axum::Json(vec![serde_json::json!({
+                        "index": 0,
+                        "name": "Show.S01E02.720p.mkv",
+                        "size": 500_000_000u64,
+                        "progress": 1.0,
+                        "priority": 1u8,
+                    })])
+                }),
+            );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let base_url = format!("http://{}", addr);
+
+        let config = Config {
+            port: 3000,
+            public_url: "http://localhost:3000".to_string(),
+            jackett_url: base_url.clone(),
+            jackett_api_key: "key".to_string(),
+            jackett_search_type: "imdb".to_string(),
+            qbittorrent_url: base_url,
+            qbittorrent_username: "admin".to_string(),
+            qbittorrent_password: "admin".to_string(),
+            download_path: "/tmp".to_string(),
+            retention_days: 0,
+        };
+        let state = AppState {
+            config: Arc::new(config.clone()),
+            qbit: Arc::new(QbitClient::new(config)),
+            http_client: reqwest::Client::new(),
+            db: Arc::new(DbClient::new(":memory:")),
+            admin_session_token: "tok".to_string(),
+            triggered_torrents: Arc::new(RwLock::new(HashSet::new())),
+            placeholder_bank: None,
+            live_sessions: Arc::new(LiveSessionStore::default()),
+        };
+
+        let plans = vec![
+            TorznabParams::SeriesImdb {
+                imdb_id: "tt0903747".to_string(),
+                season: 1,
+                episode: 2,
+            },
+            TorznabParams::SeriesSeasonImdb {
+                imdb_id: "tt0903747".to_string(),
+                season: 1,
+            },
+        ];
+        let resp = build_stream_response(
+            &state,
+            "userkey",
+            "tt0903747:1:2",
+            true,
+            1,
+            2,
+            plans,
+            None,
+            "Show S01E02",
+        )
+        .await;
+
+        assert_eq!(resp.streams.len(), 3);
+        assert_eq!(
+            resp.streams[0].name.as_deref(),
+            Some("Available (Best Match)")
+        );
+        assert_eq!(resp.streams[1].name.as_deref(), Some("Qbit - TrackerB"));
+        assert_eq!(resp.streams[2].name.as_deref(), Some("Qbit - TrackerA"));
+    }
 }
