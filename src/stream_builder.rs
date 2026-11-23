@@ -1,5 +1,6 @@
 use crate::cinemeta::get_or_fetch_cinemeta_title;
 use crate::config::AppState;
+use crate::domain::matcher::is_extra_or_sample_relative_to;
 use crate::domain::parser::{
     is_definitely_not_full_season, is_definitely_wrong_episode, is_video_file,
 };
@@ -179,6 +180,17 @@ pub async fn build_stream_response(
 
         for (idx, file) in files.iter().enumerate() {
             if !is_video_file(&file.name) || filter_fn.as_ref().is_some_and(|f| f(&file.name)) {
+                continue;
+            }
+            if let Some(b_idx) = best_idx
+                && idx != b_idx
+                && is_extra_or_sample_relative_to(
+                    &file.name,
+                    file.size,
+                    &files[b_idx].name,
+                    files[b_idx].size,
+                )
+            {
                 continue;
             }
 
@@ -455,5 +467,144 @@ mod tests {
         );
         assert_eq!(resp.streams[1].name.as_deref(), Some("Qbit - TrackerB"));
         assert_eq!(resp.streams[2].name.as_deref(), Some("Qbit - TrackerA"));
+    }
+
+    #[tokio::test]
+    async fn filters_sample_and_extra_video_files_while_keeping_legitimate_alternates() {
+        let hash = "dddd1111eeee2222ffff3333aaaa4444bbbb5555";
+        let app = Router::new()
+            .route(
+                "/api/v2.0/indexers/all/results/torznab/api",
+                get(|| async { "<rss><channel></channel></rss>" }),
+            )
+            .route(
+                "/api/v2/auth/login",
+                post(|| async {
+                    (
+                        StatusCode::OK,
+                        [(header::SET_COOKIE, "SID=mock-sid; Path=/")],
+                        "Ok.",
+                    )
+                }),
+            )
+            .route(
+                "/api/v2/torrents/info",
+                get(move || async move {
+                    axum::Json(vec![serde_json::json!({
+                        "hash": hash,
+                        "tags": "tt0903747,series",
+                        "name": "Show.S01",
+                        "size": 3_000_000_000u64,
+                        "progress": 1.0,
+                        "state": "uploading",
+                        "added_on": 1_700_000_000u64,
+                        "dlspeed": 0u64,
+                        "upspeed": 0u64,
+                        "eta": 0i64,
+                    })])
+                }),
+            )
+            .route(
+                "/api/v2/torrents/files",
+                get(|| async {
+                    axum::Json(vec![
+                        serde_json::json!({
+                            "index": 0,
+                            "name": "Show.S01/Show.S01E02.1080p.mkv",
+                            "size": 1_200_000_000u64,
+                            "progress": 1.0,
+                            "priority": 1u8,
+                        }),
+                        serde_json::json!({
+                            "index": 1,
+                            "name": "Show.S01/Sample/sample.mkv",
+                            "size": 25_000_000u64,
+                            "progress": 0.0,
+                            "priority": 0u8,
+                        }),
+                        serde_json::json!({
+                            "index": 2,
+                            "name": "Show.S01/Extras/NCOP.mkv",
+                            "size": 90_000_000u64,
+                            "progress": 0.0,
+                            "priority": 0u8,
+                        }),
+                        serde_json::json!({
+                            "index": 3,
+                            "name": "Show.S01/Show.S01E02.Trailer.mkv",
+                            "size": 40_000_000u64,
+                            "progress": 0.0,
+                            "priority": 0u8,
+                        }),
+                        serde_json::json!({
+                            "index": 4,
+                            "name": "Show.S01/Show.S01E02.720p.mkv",
+                            "size": 600_000_000u64,
+                            "progress": 0.0,
+                            "priority": 0u8,
+                        }),
+                    ])
+                }),
+            );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let base_url = format!("http://{}", addr);
+
+        let config = Config {
+            port: 3000,
+            public_url: "http://localhost:3000".to_string(),
+            jackett_url: base_url.clone(),
+            jackett_api_key: "key".to_string(),
+            jackett_search_type: "imdb".to_string(),
+            qbittorrent_url: base_url,
+            qbittorrent_username: "admin".to_string(),
+            qbittorrent_password: "admin".to_string(),
+            download_path: "/tmp".to_string(),
+            retention_days: 0,
+        };
+        let state = AppState {
+            config: Arc::new(config.clone()),
+            qbit: Arc::new(QbitClient::new(config)),
+            http_client: reqwest::Client::new(),
+            db: Arc::new(DbClient::new(":memory:")),
+            admin_session_token: "tok".to_string(),
+            triggered_torrents: Arc::new(RwLock::new(HashSet::new())),
+            placeholder_bank: None,
+            live_sessions: Arc::new(LiveSessionStore::default()),
+        };
+
+        let filter_fn: FilterFn = Arc::new(|t: &str| is_definitely_wrong_episode(t, 1, 2));
+        let resp = build_stream_response(
+            &state,
+            "userkey",
+            "tt0903747:1:2",
+            true,
+            1,
+            2,
+            vec![],
+            Some(filter_fn),
+            "Show S01E02",
+        )
+        .await;
+
+        assert_eq!(resp.streams.len(), 2);
+        assert!(
+            resp.streams[0]
+                .title
+                .as_deref()
+                .unwrap()
+                .contains("Show.S01E02.1080p.mkv")
+        );
+        assert!(
+            resp.streams[1]
+                .title
+                .as_deref()
+                .unwrap()
+                .contains("Show.S01E02.720p.mkv")
+        );
     }
 }

@@ -39,7 +39,7 @@ fn tokenize_stem(basename: &str) -> HashSet<String> {
         .collect()
 }
 
-fn is_extra_or_sample_relative_to(
+pub fn is_extra_or_sample_relative_to(
     candidate_name: &str,
     candidate_size: u64,
     current_name: &str,
