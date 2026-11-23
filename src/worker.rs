@@ -66,6 +66,7 @@ pub fn start_retention_worker(state: AppState) {
                         if retention_state.qbit.delete_torrent(&hash, true).await {
                             deleted_count += 1;
                             let _ = retention_state.db.delete_watch_history(&hash);
+                            retention_state.clear_triggered_torrent(&hash).await;
                         } else {
                             log::warn!("Failed to delete stale torrent {} from qBittorrent", hash);
                         }

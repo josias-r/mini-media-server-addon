@@ -383,6 +383,7 @@ async fn delete_torrent_handler(
 
     if state.qbit.delete_torrent(&hash, true).await {
         let _ = state.db.delete_watch_history(&hash);
+        state.clear_triggered_torrent(&hash).await;
         Json(serde_json::json!({ "ok": true })).into_response()
     } else {
         json_error(

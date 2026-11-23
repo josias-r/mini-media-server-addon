@@ -120,6 +120,17 @@ impl AppState {
             live_sessions: Arc::new(LiveSessionStore::default()),
         }
     }
+
+    /// Evicts cached trigger/prefetch keys for a deleted torrent so future triggers start fresh.
+    pub async fn clear_triggered_torrent(&self, hash: &str) {
+        let hash_lower = hash.trim().to_lowercase();
+        if hash_lower.is_empty() {
+            return;
+        }
+        let file_prefix = format!("file:{}:", hash_lower);
+        let mut set = self.triggered_torrents.write().await;
+        set.retain(|k| k != &hash_lower && !k.starts_with(&file_prefix));
+    }
 }
 
 pub fn parse_retention_days_from(raw: Option<&str>) -> Result<u64, String> {
@@ -203,5 +214,46 @@ mod tests {
         assert!(parse_retention_days_from(Some("-1")).is_err());
         assert!(parse_retention_days_from(Some("days")).is_err());
         assert!(parse_retention_days_from(Some("90 weeks")).is_err());
+    }
+
+    #[tokio::test]
+    async fn clear_triggered_torrent_evicts_hash_and_file_keys_only() {
+        let config = Config {
+            port: 3000,
+            public_url: "http://localhost:3000".to_string(),
+            jackett_url: "http://localhost:9117".to_string(),
+            jackett_api_key: "k".to_string(),
+            jackett_search_type: "text".to_string(),
+            qbittorrent_url: "http://localhost:8080".to_string(),
+            qbittorrent_username: "admin".to_string(),
+            qbittorrent_password: "admin".to_string(),
+            download_path: "/tmp".to_string(),
+            retention_days: 0,
+        };
+        let state = AppState {
+            config: Arc::new(config.clone()),
+            qbit: Arc::new(QbitClient::new(config)),
+            http_client: Client::new(),
+            db: Arc::new(DbClient::new(":memory:")),
+            admin_session_token: "tok".to_string(),
+            triggered_torrents: Arc::new(RwLock::new(HashSet::from([
+                "aaaa1111bbbb2222cccc3333dddd4444eeee5555".to_string(),
+                "file:aaaa1111bbbb2222cccc3333dddd4444eeee5555:0".to_string(),
+                "file:aaaa1111bbbb2222cccc3333dddd4444eeee5555:3".to_string(),
+                "9999888877776666555544443333222211110000".to_string(),
+                "file:9999888877776666555544443333222211110000:1".to_string(),
+            ]))),
+            placeholder_bank: None,
+            live_sessions: Arc::new(LiveSessionStore::default()),
+        };
+
+        state
+            .clear_triggered_torrent(" AAAA1111BBBB2222CCCC3333DDDD4444EEEE5555 ")
+            .await;
+
+        let remaining = state.triggered_torrents.read().await;
+        assert_eq!(remaining.len(), 2);
+        assert!(remaining.contains("9999888877776666555544443333222211110000"));
+        assert!(remaining.contains("file:9999888877776666555544443333222211110000:1"));
     }
 }
