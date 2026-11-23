@@ -1,7 +1,7 @@
 use super::{AppState, PlaceholderState, build_live_placeholder_redirect, require_valid_api_key};
 use crate::domain::{
     base_imdb_id, build_torrent_tags, decide_play_placeholder, file_exists_nonempty,
-    find_target_file, is_torrent_stalled, select_next_episode_to_prefetch,
+    find_target_file, is_file_stream_ready, is_torrent_stalled, select_next_episode_to_prefetch,
 };
 use crate::placeholder::{build_session_key, has_nonzero_range_header};
 use axum::{
@@ -106,7 +106,9 @@ pub async fn play_file(
         torrent_stalled,
     );
 
-    let next_episode_prefetch = if placeholder.is_none() {
+    let qbit_stream_ready =
+        file_priority != Some(0) && is_file_stream_ready(file_size, file_progress);
+    let next_episode_prefetch = if qbit_stream_ready {
         target_file.and_then(|(cur_vec_idx, _)| {
             select_next_episode_to_prefetch(
                 &stremio_id,
@@ -119,7 +121,7 @@ pub async fn play_file(
         None
     };
 
-    let current_file_priority = if placeholder.is_none()
+    let current_file_priority = if qbit_stream_ready
         && file_progress < 1.0
         && (next_episode_prefetch.is_some() || file_priority.is_some_and(|p| p >= 6))
     {
@@ -1054,5 +1056,53 @@ mod tests {
             c,
             MockQbitCall::FilePrio { ids, .. } if ids != "0"
         )));
+    }
+
+    #[tokio::test]
+    async fn full_season_play_qbit_ready_without_local_file_still_prefetches_next_episode() {
+        let hash = "3333444455556666777788889999aaaabbbbcccc";
+        let ep1_path = "Breaking.Bad.S01.1080p/Breaking.Bad.S01E01.mkv";
+        let dir = TempDir::new("play_missing_local_prefetch");
+
+        let mut files_map = HashMap::new();
+        files_map.insert(hash.to_string(), season_pack_files_json(1, 0.05, 0));
+        let mock = MockQbitState::new(
+            vec![mock_torrent_json(
+                hash,
+                "tt0903747,series",
+                "Breaking.Bad.S01.1080p",
+                3 * GB,
+                0.02,
+                "downloading",
+                5_000_000,
+            )],
+            files_map,
+        );
+        let qbit_url = spawn_mock_qbit(mock.clone()).await;
+        let (app, _state, api_key, _db) = build_test_app(qbit_url, dir.0.to_str().unwrap());
+
+        let loc = get_redirect_location(
+            app,
+            &play_uri(&api_key, "tt0903747:1:1", hash, 0, ep1_path, ""),
+        )
+        .await;
+        assert!(
+            loc.contains("/placeholder-live/play/") && loc.contains("initial=files_missing"),
+            "unexpected location: {loc}"
+        );
+
+        wait_for_add_tags(&mock).await;
+
+        let calls = mock.recorded_calls();
+        assert!(calls.contains(&MockQbitCall::FilePrio {
+            hash: hash.to_string(),
+            ids: "0".to_string(),
+            priority: "6".to_string(),
+        }));
+        assert!(calls.contains(&MockQbitCall::FilePrio {
+            hash: hash.to_string(),
+            ids: "1".to_string(),
+            priority: "1".to_string(),
+        }));
     }
 }
