@@ -69,16 +69,21 @@ struct ParsedEpisode {
     ep_end: u32,
 }
 
+fn parse_range_caps(caps: &regex::Captures, start_idx: usize, end_idx: usize) -> (u32, u32) {
+    let start: u32 = caps[start_idx].parse().unwrap();
+    let end: u32 = caps
+        .get(end_idx)
+        .map_or(start, |m| m.as_str().parse().unwrap());
+    (start, end)
+}
+
 fn extract_episode_from_segment(segment: &str) -> Option<ParsedEpisode> {
     let upper = strip_video_extension(segment).to_uppercase();
 
     // Pattern 1: S01E05 or S01.E05 or S01E05-E06 or S01E05-06
     if let Some(caps) = SXX_EXX_RE.captures(&upper) {
-        let s: u32 = caps.get(1).unwrap().as_str().parse().unwrap();
-        let ep_start: u32 = caps.get(2).unwrap().as_str().parse().unwrap();
-        let ep_end: u32 = caps
-            .get(3)
-            .map_or(ep_start, |m| m.as_str().parse().unwrap());
+        let s: u32 = caps[1].parse().unwrap();
+        let (ep_start, ep_end) = parse_range_caps(&caps, 2, 3);
         return Some(ParsedEpisode {
             season: Some((s, s)),
             ep_start,
@@ -88,12 +93,9 @@ fn extract_episode_from_segment(segment: &str) -> Option<ParsedEpisode> {
 
     // Pattern 2: 1x05 or 1x05-06 (ignore video resolutions like 1920x1080 or 1280x720)
     for caps in AX_B_RE.captures_iter(&upper) {
-        let s: u32 = caps.get(1).unwrap().as_str().parse().unwrap();
+        let s: u32 = caps[1].parse().unwrap();
         if s < 30 {
-            let ep_start: u32 = caps.get(2).unwrap().as_str().parse().unwrap();
-            let ep_end: u32 = caps
-                .get(3)
-                .map_or(ep_start, |m| m.as_str().parse().unwrap());
+            let (ep_start, ep_end) = parse_range_caps(&caps, 2, 3);
             return Some(ParsedEpisode {
                 season: Some((s, s)),
                 ep_start,
@@ -104,10 +106,7 @@ fn extract_episode_from_segment(segment: &str) -> Option<ParsedEpisode> {
 
     // Pattern 3: Episode markers like E05, EP05, E05_Title, Episode 5
     if let Some(caps) = EP_RE.captures(&upper) {
-        let ep_start: u32 = caps.get(1).unwrap().as_str().parse().unwrap();
-        let ep_end: u32 = caps
-            .get(2)
-            .map_or(ep_start, |m| m.as_str().parse().unwrap());
+        let (ep_start, ep_end) = parse_range_caps(&caps, 1, 2);
         return Some(ParsedEpisode {
             season: None,
             ep_start,
@@ -122,10 +121,7 @@ fn extract_episode_from_segment(segment: &str) -> Option<ParsedEpisode> {
         &*BARE_BRACKET_EP_RE,
     ] {
         for caps in re.captures_iter(&upper) {
-            let ep_start: u32 = caps.get(1).unwrap().as_str().parse().unwrap();
-            let ep_end: u32 = caps
-                .get(2)
-                .map_or(ep_start, |m| m.as_str().parse().unwrap());
+            let (ep_start, ep_end) = parse_range_caps(&caps, 1, 2);
             if !is_likely_non_episode_number(ep_start) && !is_likely_non_episode_number(ep_end) {
                 return Some(ParsedEpisode {
                     season: None,
@@ -169,8 +165,7 @@ fn extract_seasons_from_segment(segment: &str) -> Vec<(u32, u32)> {
     let mut ranges: Vec<(u32, u32)> = SEASON_RE
         .captures_iter(&upper)
         .map(|caps| {
-            let s_start: u32 = caps.get(1).unwrap().as_str().parse().unwrap();
-            let s_end: u32 = caps.get(2).map_or(s_start, |m| m.as_str().parse().unwrap());
+            let (s_start, s_end) = parse_range_caps(&caps, 1, 2);
             (s_start.min(s_end), s_start.max(s_end))
         })
         .collect();
@@ -300,20 +295,15 @@ pub fn is_definitely_not_full_season(title: &str, expected_season: u32) -> bool 
     let sxx_matches = collect_sxx_exx_captures(&upper);
     if sxx_matches.len() == 1 {
         let caps = &sxx_matches[0];
-        let s: u32 = caps.get(1).unwrap().as_str().parse().unwrap();
-        if s != expected_season {
-            return true;
-        }
-        let e_start: u32 = caps.get(2).unwrap().as_str().parse().unwrap();
-        let e_end: u32 = caps.get(3).map_or(e_start, |m| m.as_str().parse().unwrap());
-        if e_start == e_end {
+        let s: u32 = caps[1].parse().unwrap();
+        let (e_start, e_end) = parse_range_caps(caps, 2, 3);
+        if s != expected_season || e_start == e_end {
             return true;
         }
     } else if sxx_matches.len() > 1 {
-        let mut min_s = u32::MAX;
-        let mut max_s = 0;
+        let (mut min_s, mut max_s) = (u32::MAX, 0);
         for caps in &sxx_matches {
-            let s: u32 = caps.get(1).unwrap().as_str().parse().unwrap();
+            let s: u32 = caps[1].parse().unwrap();
             min_s = min_s.min(s);
             max_s = max_s.max(s);
         }
@@ -323,31 +313,24 @@ pub fn is_definitely_not_full_season(title: &str, expected_season: u32) -> bool 
     }
 
     for caps in AX_B_RE.captures_iter(&upper) {
-        let s: u32 = caps.get(1).unwrap().as_str().parse().unwrap();
+        let s: u32 = caps[1].parse().unwrap();
         if s < 30 {
-            if s != expected_season {
-                return true;
-            }
-            let e_start: u32 = caps.get(2).unwrap().as_str().parse().unwrap();
-            let e_end: u32 = caps.get(3).map_or(e_start, |m| m.as_str().parse().unwrap());
-            if e_start == e_end {
+            let (e_start, e_end) = parse_range_caps(&caps, 2, 3);
+            if s != expected_season || e_start == e_end {
                 return true;
             }
         }
     }
 
     if let Some(caps) = EP_RE.captures(&upper) {
-        let e_start: u32 = caps.get(1).unwrap().as_str().parse().unwrap();
-        let e_end: u32 = caps.get(2).map_or(e_start, |m| m.as_str().parse().unwrap());
+        let (e_start, e_end) = parse_range_caps(&caps, 1, 2);
         if e_start == e_end {
             return true;
         }
     }
 
     if let Some(caps) = SEASON_RE.captures(&upper) {
-        let s_start: u32 = caps.get(1).unwrap().as_str().parse().unwrap();
-        let s_end: u32 = caps.get(2).map_or(s_start, |m| m.as_str().parse().unwrap());
-
+        let (s_start, s_end) = parse_range_caps(&caps, 1, 2);
         if expected_season < s_start || expected_season > s_end {
             return true;
         }

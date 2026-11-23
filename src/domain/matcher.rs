@@ -1,4 +1,4 @@
-use crate::parser::{
+use super::parser::{
     is_definitely_not_full_season, is_definitely_wrong_episode, is_video_file, parse_file_episode,
 };
 use std::collections::HashSet;
@@ -172,56 +172,49 @@ pub fn find_next_episode_file(
         episode.checked_add(1)?
     };
 
+    let candidates: Vec<(usize, u64, bool, super::parser::EpisodeInfo)> = files
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, &(name, size))| {
+            if idx == current_file_vec_idx || !is_video_file(name) {
+                return None;
+            }
+            if is_extra_or_sample_relative_to(name, size, current_name, current_size) {
+                return None;
+            }
+            let info = parse_file_episode(name)?;
+            let same_parent = parent_dir_key(name) == current_parent_key;
+            if !info.from_basename && same_parent {
+                return None;
+            }
+            Some((idx, size, same_parent, info))
+        })
+        .collect();
+
     let find_candidate = |target_season: u32,
                           target_episode: u32,
                           require_explicit_season: bool|
      -> Option<NextEpisodeMatch> {
-        let mut best: Option<((bool, bool, u64), usize)> = None;
-
-        for (idx, &(name, size)) in files.iter().enumerate() {
-            if idx == current_file_vec_idx || !is_video_file(name) {
-                continue;
-            }
-            if is_extra_or_sample_relative_to(name, size, current_name, current_size) {
-                continue;
-            }
-            let Some(info) = parse_file_episode(name) else {
-                continue;
-            };
-            let same_parent = parent_dir_key(name) == current_parent_key;
-            if !info.from_basename && same_parent {
-                continue;
-            }
-            match info.season_ranges {
-                Some(ref ranges) => {
-                    if !ranges
+        candidates
+            .iter()
+            .rev()
+            .filter(|(_, _, _, info)| {
+                let season_ok = match info.season_ranges {
+                    Some(ref ranges) => ranges
                         .iter()
-                        .any(|&(s, e)| target_season >= s && target_season <= e)
-                    {
-                        continue;
-                    }
-                }
-                None => {
-                    if require_explicit_season {
-                        continue;
-                    }
-                }
-            }
-            if target_episode < info.ep_start || target_episode > info.ep_end {
-                continue;
-            }
-
-            let score = (info.from_basename, same_parent, size);
-            if best.is_none_or(|(best_score, _)| score > best_score) {
-                best = Some((score, idx));
-            }
-        }
-
-        best.map(|(_, file_vec_idx)| NextEpisodeMatch {
-            file_vec_idx,
-            season: target_season,
-            episode: target_episode,
-        })
+                        .any(|&(s, e)| target_season >= s && target_season <= e),
+                    None => !require_explicit_season,
+                };
+                season_ok && target_episode >= info.ep_start && target_episode <= info.ep_end
+            })
+            .max_by_key(|&&(_, size, same_parent, ref info)| {
+                (info.from_basename, same_parent, size)
+            })
+            .map(|&(file_vec_idx, _, _, _)| NextEpisodeMatch {
+                file_vec_idx,
+                season: target_season,
+                episode: target_episode,
+            })
     };
 
     if let Some(matched) = find_candidate(season, next_episode, false) {
@@ -231,20 +224,7 @@ pub fn find_next_episode_file(
     if season >= 1
         && let Some(next_season) = season.checked_add(1)
     {
-        let has_later_in_current_season = files.iter().enumerate().any(|(idx, &(name, size))| {
-            if idx == current_file_vec_idx || !is_video_file(name) {
-                return false;
-            }
-            if is_extra_or_sample_relative_to(name, size, current_name, current_size) {
-                return false;
-            }
-            let Some(info) = parse_file_episode(name) else {
-                return false;
-            };
-            let same_parent = parent_dir_key(name) == current_parent_key;
-            if !info.from_basename && same_parent {
-                return false;
-            }
+        let has_later_in_current_season = candidates.iter().any(|(_, _, _, info)| {
             let in_current_season = match info.season_ranges {
                 Some(ref ranges) => ranges.iter().any(|&(s, e)| season >= s && season <= e),
                 None => true,
@@ -267,91 +247,55 @@ pub fn find_best_file_match(
     season: u32,
     episode: u32,
 ) -> Option<usize> {
-    // 1. Filter out non-videos and wrong episodes
-    let mut valid_files = Vec::new();
-    for (idx, &(name, size)) in files.iter().enumerate() {
-        if is_video_file(name) {
-            if is_series && is_definitely_wrong_episode(name, season, episode) {
-                continue;
-            }
-            valid_files.push((idx, name, size));
-        }
-    }
-
-    // Fallback: If no files passed the episode filter, just take all videos
-    if valid_files.is_empty() {
-        for (idx, &(name, size)) in files.iter().enumerate() {
-            if is_video_file(name) {
-                valid_files.push((idx, name, size));
-            }
-        }
-    }
+    let mut valid_files: Vec<(usize, &str, u64)> = files
+        .iter()
+        .enumerate()
+        .filter(|&(_, &(name, _))| {
+            is_video_file(name)
+                && !(is_series && is_definitely_wrong_episode(name, season, episode))
+        })
+        .map(|(idx, &(name, size))| (idx, name, size))
+        .collect();
 
     if valid_files.is_empty() {
-        return None;
+        valid_files = files
+            .iter()
+            .enumerate()
+            .filter(|&(_, &(name, _))| is_video_file(name))
+            .map(|(idx, &(name, size))| (idx, name, size))
+            .collect();
     }
 
-    // 2. Token + Levenshtein Matching
-    let expected_title_lower = expected_title.to_lowercase();
-    let expected_tokens: Vec<&str> = expected_title_lower
+    let expected_lower = expected_title.to_lowercase();
+    let expected_tokens: Vec<&str> = expected_lower
         .split(|c: char| !c.is_alphanumeric())
         .filter(|s| !s.is_empty())
         .collect();
 
-    let mut best_idx = 0;
-    // We want the LOWEST distance score. And for ties, the LARGEST size.
-    // We can store (distance_score, size).
-    // To easily use `cmp`, since we want to MINIMIZE distance and MAXIMIZE size,
-    // we can sort by distance ascending, then size descending.
-    // Or keep a running best.
-    let mut best_score: Option<(usize, u64)> = None;
+    valid_files
+        .into_iter()
+        .min_by_key(|&(_, name, size)| {
+            let basename = name.rsplit(['/', '\\']).next().unwrap_or(name);
+            let filename_lower = basename.to_lowercase();
+            let filename_tokens: Vec<&str> = filename_lower
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|s| !s.is_empty())
+                .collect();
 
-    for (i, &(_idx, name, size)) in valid_files.iter().enumerate() {
-        let basename = name.rsplit(['/', '\\']).next().unwrap_or(name);
-        let filename_lower = basename.to_lowercase();
-        let filename_tokens: Vec<&str> = filename_lower
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|s| !s.is_empty())
-            .collect();
+            let total_distance: usize = expected_tokens
+                .iter()
+                .map(|expected_token| {
+                    filename_tokens
+                        .iter()
+                        .map(|ft| levenshtein(expected_token, ft))
+                        .min()
+                        .unwrap_or(expected_token.len())
+                })
+                .sum();
 
-        let mut total_distance = 0;
-
-        for &expected_token in &expected_tokens {
-            // Find the minimum Levenshtein distance from this expected token to any filename token
-            let mut min_token_dist = usize::MAX;
-            for &file_token in &filename_tokens {
-                let dist = levenshtein(expected_token, file_token);
-                if dist < min_token_dist {
-                    min_token_dist = dist;
-                }
-            }
-            // If filename has no tokens, min_token_dist remains MAX. We should fallback to the expected token length.
-            if min_token_dist == usize::MAX {
-                min_token_dist = expected_token.len();
-            }
-            total_distance += min_token_dist;
-        }
-
-        let current_score = (total_distance, size);
-
-        match best_score {
-            None => {
-                best_score = Some(current_score);
-                best_idx = i;
-            }
-            Some((best_dist, best_size)) => {
-                // If total_distance is strictly less, it's better.
-                // If it's equal, then we check if size is strictly greater.
-                if total_distance < best_dist || (total_distance == best_dist && size > best_size) {
-                    best_score = Some(current_score);
-                    best_idx = i;
-                }
-            }
-        }
-    }
-
-    let (chosen_idx, _, _) = valid_files[best_idx];
-    Some(chosen_idx)
+            (total_distance, std::cmp::Reverse(size))
+        })
+        .map(|(idx, _, _)| idx)
 }
 
 #[cfg(test)]
