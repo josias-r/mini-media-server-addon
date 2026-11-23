@@ -1,24 +1,20 @@
-pub mod admin;
 pub mod api;
 pub mod catalog;
-pub mod manifest;
-pub mod movie;
 pub mod play;
-pub mod series;
 pub mod stream;
 pub mod trigger;
 
+pub use crate::config::AppState;
 use crate::config::Config;
-pub use crate::placeholder_stream::PlaceholderState;
-use crate::qbittorrent::QbitClient;
+pub use crate::placeholder::PlaceholderState;
+use crate::placeholder::serve_live_placeholder;
+use crate::stream_builder::build_media_streams;
 use axum::Router;
+use axum::extract::{Path, State};
 use axum::http::{HeaderValue, StatusCode, header};
-use axum::response::{IntoResponse, Redirect, Response};
+use axum::response::{IntoResponse, Json, Redirect, Response};
 use axum::routing::get;
-use reqwest::Client;
-use std::collections::HashSet;
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use serde_json::json;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
@@ -56,18 +52,6 @@ pub fn build_live_placeholder_redirect(
     res
 }
 
-#[derive(Clone)]
-pub struct AppState {
-    pub config: Arc<Config>,
-    pub qbit: Arc<QbitClient>,
-    pub http_client: Client,
-    pub db: Arc<crate::db::DbClient>,
-    pub admin_session_token: String,
-    pub triggered_torrents: Arc<RwLock<HashSet<String>>>,
-    pub placeholder_bank: Option<Arc<crate::placeholder_stream::PlaceholderBank>>,
-    pub live_sessions: Arc<crate::placeholder_stream::LiveSessionStore>,
-}
-
 pub fn require_valid_api_key(state: &AppState, api_key: &str) -> Option<Response> {
     if state.db.validate_api_key(api_key) {
         None
@@ -76,13 +60,48 @@ pub fn require_valid_api_key(state: &AppState, api_key: &str) -> Option<Response
     }
 }
 
+async fn manifest(State(state): State<AppState>, Path(api_key): Path<String>) -> Response {
+    if let Some(err) = require_valid_api_key(&state, &api_key) {
+        return err;
+    }
+
+    Json(json!({
+        "id": "mini-media-server.addon",
+        "version": env!("CARGO_PKG_VERSION"),
+        "name": "Mini Media Server",
+        "description": "A tiny Stremio addon acting similar to a self-hostable debrid service.",
+        "resources": ["catalog", "stream"],
+        "types": ["movie", "series"],
+        "catalogs": [
+            { "type": "movie", "id": "mms_user_movies", "name": "My History" },
+            { "type": "series", "id": "mms_user_series", "name": "My History" },
+            { "type": "movie", "id": "mms_community_movies", "name": "Community" },
+            { "type": "series", "id": "mms_community_series", "name": "Community" }
+        ]
+    }))
+    .into_response()
+}
+
+async fn stream_handler(
+    State(state): State<AppState>,
+    Path((api_key, id_ext)): Path<(String, String)>,
+    is_series: bool,
+) -> Response {
+    if let Some(err) = require_valid_api_key(&state, &api_key) {
+        return err;
+    }
+
+    let id = id_ext.replace(".json", "");
+    Json(build_media_streams(&state, &api_key, &id, is_series).await).into_response()
+}
+
 pub fn create_router(state: AppState) -> Router {
-    let static_dir = std::env::var("STATIC_DIR").unwrap_or_else(|_| "app/dist".to_string());
+    let static_dir = Config::static_dir();
     let spa_service = ServeDir::new(&static_dir)
         .not_found_service(ServeFile::new(format!("{}/index.html", static_dir)));
 
     Router::new()
-        .route("/{api_key}/manifest.json", get(manifest::manifest))
+        .route("/{api_key}/manifest.json", get(manifest))
         .route(
             "/{api_key}/catalog/{media_type}/{catalog_id}",
             get(catalog::catalog_handler),
@@ -91,8 +110,14 @@ pub fn create_router(state: AppState) -> Router {
             "/{api_key}/catalog/{media_type}/{catalog_id}/{extra}",
             get(catalog::catalog_with_extra_handler),
         )
-        .route("/{api_key}/stream/movie/{id}", get(movie::movie_stream))
-        .route("/{api_key}/stream/series/{id}", get(series::series_stream))
+        .route(
+            "/{api_key}/stream/movie/{id}",
+            get(|s, p| stream_handler(s, p, false)),
+        )
+        .route(
+            "/{api_key}/stream/series/{id}",
+            get(|s, p| stream_handler(s, p, true)),
+        )
         .route(
             "/{api_key}/trigger-download/{stremio_id}/{info_hash}",
             get(trigger::trigger_download),
@@ -107,7 +132,7 @@ pub fn create_router(state: AppState) -> Router {
         )
         .route(
             "/{api_key}/placeholder-live/{mode}/{stremio_id}/{info_hash}",
-            get(crate::placeholder_stream::serve_live_placeholder),
+            get(serve_live_placeholder),
         )
         .nest("/api", api::router())
         .fallback_service(spa_service)

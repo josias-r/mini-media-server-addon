@@ -1,7 +1,9 @@
 use crate::config::Config;
+use crate::domain::extract_btih_hex;
 use log::{debug, error};
 use reqwest::Client;
 use serde::Deserialize;
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct JackettResult {
@@ -122,6 +124,27 @@ struct JackettIndexer {
     name: Option<String>,
 }
 
+pub async fn check_jackett_health(client: &Client, config: &Config) -> bool {
+    let base = config.jackett_url.trim_end_matches('/');
+    let url = format!(
+        "{}/api/v2.0/indexers/all/results/torznab/api?t=caps&apikey={}",
+        base,
+        urlencoding::encode(&config.jackett_api_key)
+    );
+
+    match client
+        .get(&url)
+        .timeout(Duration::from_secs(3))
+        .send()
+        .await
+    {
+        Ok(res) => res.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+const JACKETT_TIMEOUT: Duration = Duration::from_secs(10);
+
 pub async fn fetch_jackett_results(
     client: &Client,
     config: &Config,
@@ -134,7 +157,7 @@ pub async fn fetch_jackett_results(
     );
 
     debug!("Fetching from Jackett: {}", url);
-    let response = match client.get(&url).send().await {
+    let response = match client.get(&url).timeout(JACKETT_TIMEOUT).send().await {
         Ok(r) if r.status().is_success() => r,
         Ok(r) => {
             error!("Jackett API responded with status: {}", r.status());
@@ -248,90 +271,4 @@ pub async fn fetch_jackett_results(
 
     results.sort_by_key(|b| std::cmp::Reverse(b.seeders));
     results
-}
-
-fn decode_base32_btih(encoded: &str) -> Option<String> {
-    if encoded.len() != 32 {
-        return None;
-    }
-
-    let mut bytes = [0u8; 20];
-    let mut buffer: u32 = 0;
-    let mut bits_left: u8 = 0;
-    let mut out_idx = 0;
-
-    for b in encoded.bytes() {
-        let upper = b.to_ascii_uppercase();
-        let val = match upper {
-            b'A'..=b'Z' => upper - b'A',
-            b'2'..=b'7' => upper - b'2' + 26,
-            _ => return None,
-        };
-        buffer = (buffer << 5) | u32::from(val);
-        bits_left += 5;
-        if bits_left >= 8 {
-            bits_left -= 8;
-            bytes[out_idx] = ((buffer >> bits_left) & 0xff) as u8;
-            out_idx += 1;
-        }
-    }
-
-    let mut hex = String::with_capacity(40);
-    for byte in bytes {
-        use std::fmt::Write;
-        let _ = write!(&mut hex, "{byte:02x}");
-    }
-    Some(hex)
-}
-
-/// Extracts a 40-character lowercase hex BitTorrent info_hash from a URI containing `urn:btih:`.
-/// Supports both 40-character hex and 32-character RFC 4648 Base32 hashes.
-pub fn extract_btih_hex(uri: &str) -> Option<String> {
-    let lower = uri.to_ascii_lowercase();
-    let start = lower.find("urn:btih:")?;
-    let hash_part = &uri[start + 9..];
-    let end = hash_part.find('&').unwrap_or(hash_part.len());
-    let candidate = hash_part[..end].trim();
-
-    if candidate.len() == 40 && candidate.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Some(candidate.to_lowercase());
-    }
-
-    if candidate.len() == 32 {
-        return decode_base32_btih(candidate);
-    }
-
-    None
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extracts_hex_btih_case_insensitively() {
-        let magnet = "magnet:?xt=URN:BTIH:BA0B39DE2C19CEADCFB1B441D8B6D668E57458EF&dn=Avatar";
-        assert_eq!(
-            extract_btih_hex(magnet).as_deref(),
-            Some("ba0b39de2c19ceadcfb1b441d8b6d668e57458ef")
-        );
-    }
-
-    #[test]
-    fn extracts_and_decodes_base32_btih() {
-        let magnet = "magnet:?xt=urn:btih:CWWVGHCJO23WHPWLZ7ZHDLR7KD4NXPQV&dn=Test";
-        let hex = extract_btih_hex(magnet).unwrap();
-        assert_eq!(hex.len(), 40);
-        assert_eq!(hex, "15ad531c4976b763becbcff271ae3f50f8dbbe15");
-    }
-
-    #[test]
-    fn rejects_invalid_btih() {
-        assert_eq!(extract_btih_hex("https://example.com/file.torrent"), None);
-        assert_eq!(extract_btih_hex("magnet:?xt=urn:btih:tooshort"), None);
-        assert_eq!(
-            extract_btih_hex("magnet:?xt=urn:btih:11111111111111111111111111111111"),
-            None
-        );
-    }
 }

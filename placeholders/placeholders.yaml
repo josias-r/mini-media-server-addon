@@ -1,6 +1,6 @@
 download_started:
   title: Fetching your video!
-  sub: Hang tight — updates live
+  sub: Check back in a few seconds
 
 fetching_metadata:
   title: Sniffing out files...
@@ -8,7 +8,7 @@ fetching_metadata:
 
 episode_requested:
   title: Fetching episode!
-  sub: Hang tight — updates live
+  sub: Check back in a few seconds
 
 stalled:
   title: Waiting on peers...

@@ -1,4 +1,5 @@
 use super::{AppState, PlaceholderState, build_live_placeholder_redirect, require_valid_api_key};
+use crate::domain::{file_exists_nonempty, resolve_safe_download_path};
 use axum::http::StatusCode;
 use axum::http::header::RANGE;
 use axum::{
@@ -6,31 +7,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use std::collections::HashMap;
-use std::path::{Component, Path as StdPath, PathBuf};
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
-
-pub(crate) fn resolve_safe_download_path(download_root: &str, relative: &str) -> Option<PathBuf> {
-    if relative.is_empty() {
-        return None;
-    }
-
-    let rel_path = StdPath::new(relative);
-    let mut safe_rel = PathBuf::new();
-    for comp in rel_path.components() {
-        match comp {
-            Component::Normal(part) => safe_rel.push(part),
-            Component::CurDir => {}
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
-        }
-    }
-
-    if safe_rel.as_os_str().is_empty() {
-        return None;
-    }
-
-    Some(StdPath::new(download_root).join(safe_rel))
-}
 
 pub async fn stream_file(
     State(state): State<AppState>,
@@ -58,10 +36,7 @@ pub async fn stream_file(
         file_path
     );
 
-    let has_bytes = std::fs::metadata(&full_path)
-        .map(|m| m.is_file() && m.len() > 0)
-        .unwrap_or(false);
-    if !has_bytes {
+    if !file_exists_nonempty(&state.config.download_path, file_path) {
         log::warn!(
             "File does not exist or is empty on disk (yet): {:?}; serving missing-files placeholder",
             full_path

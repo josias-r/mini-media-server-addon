@@ -1,5 +1,7 @@
+use crate::config::Config;
+use crate::domain::parse_stremio_media_id;
 use log::{error, info};
-use rusqlite::{Connection, OptionalExtension, Result, params};
+use rusqlite::{Connection, OptionalExtension, Result, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -33,35 +35,6 @@ pub struct MediaHistoryEntry {
     pub latest_stremio_id: String,
     pub info_hash: String,
     pub last_watched_at: String,
-}
-
-/// Parses a Stremio ID (e.g. `tt1375666` or `tt0903747:1:2`) into
-/// `(normalized_stremio_id, base_imdb_id, media_type)`.
-pub fn parse_stremio_media_id(stremio_id: &str) -> Option<(String, String, String)> {
-    let trimmed = stremio_id.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let parts: Vec<&str> = trimmed.split(':').collect();
-    let base_id = parts[0].trim().to_lowercase();
-    if base_id.is_empty() {
-        return None;
-    }
-
-    if parts.len() >= 3 {
-        let season: u32 = parts[1].trim().parse().ok()?;
-        let episode: u32 = parts[2].trim().parse().ok()?;
-        Some((
-            format!("{}:{}:{}", base_id, season, episode),
-            base_id,
-            "series".to_string(),
-        ))
-    } else if !trimmed.contains(':') {
-        Some((base_id.clone(), base_id, "movie".to_string()))
-    } else {
-        None
-    }
 }
 
 #[derive(Clone)]
@@ -181,39 +154,34 @@ impl DbClient {
 
     pub fn get_admin_password(&self) -> Result<String> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT value FROM settings WHERE key = 'admin_password'")?;
-
-        // We have to collect because mapping borrows stmt
-        let mut rows = stmt.query([])?;
-        if let Some(row) = rows.next()? {
-            Ok(row.get(0)?)
-        } else {
-            // Drop stmt before executing another query
-            drop(rows);
-            drop(stmt);
-
-            // Seed from ADMIN_PASSWORD env var if provided, otherwise generate a random default password
-            let env_password = std::env::var("ADMIN_PASSWORD")
-                .ok()
-                .map(|p| p.trim().to_string())
-                .filter(|p| !p.is_empty());
-            let password = match env_password {
-                Some(p) => {
-                    info!("Initialized admin password from ADMIN_PASSWORD environment variable");
-                    p
-                }
-                None => {
-                    let generated = Uuid::new_v4().to_string().replace("-", "")[..12].to_string();
-                    info!("Generated default admin password: {}", generated);
-                    generated
-                }
-            };
-            conn.execute(
-                "INSERT INTO settings (key, value) VALUES ('admin_password', ?)",
-                params![&password],
-            )?;
-            Ok(password)
+        if let Some(pw) = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'admin_password'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?
+        {
+            return Ok(pw);
         }
+
+        // Seed from ADMIN_PASSWORD env var if provided, otherwise generate a random default password
+        let password = match Config::admin_password_from_env() {
+            Some(p) => {
+                info!("Initialized admin password from ADMIN_PASSWORD environment variable");
+                p
+            }
+            None => {
+                let generated = Uuid::new_v4().to_string().replace('-', "")[..12].to_string();
+                info!("Generated default admin password: {}", generated);
+                generated
+            }
+        };
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('admin_password', ?)",
+            params![&password],
+        )?;
+        Ok(password)
     }
 
     pub fn set_admin_password(&self, password: &str) -> Result<()> {
@@ -252,15 +220,17 @@ impl DbClient {
 
     pub fn validate_api_key(&self, api_key: &str) -> bool {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = match conn.prepare("SELECT 1 FROM users WHERE api_key = ?") {
-            Ok(s) => s,
-            Err(e) => {
-                error!("Database error preparing validate query: {}", e);
-                return false;
-            }
-        };
-
-        stmt.exists(params![api_key]).unwrap_or(false)
+        conn.query_row(
+            "SELECT 1 FROM users WHERE api_key = ?",
+            params![api_key],
+            |_| Ok(()),
+        )
+        .optional()
+        .unwrap_or_else(|e| {
+            error!("Database error preparing validate query: {}", e);
+            None
+        })
+        .is_some()
     }
 
     pub fn update_watch_history(
@@ -289,13 +259,7 @@ impl DbClient {
         let history = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?;
-
-        let mut map = std::collections::HashMap::new();
-        for item in history {
-            let (id, time) = item?;
-            map.insert(id, time);
-        }
-        Ok(map)
+        history.collect()
     }
 
     pub fn delete_watch_history(&self, item_id: &str) -> Result<()> {
@@ -350,13 +314,20 @@ impl DbClient {
         Ok(())
     }
 
-    pub fn get_user_catalog_entries(
+    fn query_catalog_entries(
         &self,
-        api_key: &str,
+        api_key: Option<&str>,
         media_type: &str,
     ) -> Result<Vec<MediaHistoryEntry>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
+        let (where_clause, param_vals): (&str, Vec<&str>) = match api_key {
+            Some(key) => (
+                "WHERE api_key = ? AND media_type = ?",
+                vec![key, media_type],
+            ),
+            None => ("WHERE media_type = ?", vec![media_type]),
+        };
+        let sql = format!(
             "SELECT imdb_id, media_type, stremio_id, info_hash, last_watched_at
              FROM (
                  SELECT
@@ -372,13 +343,13 @@ impl DbClient {
                          ORDER BY last_watched_at DESC, watch_seq DESC, rowid DESC
                      ) AS rn
                  FROM media_watch_history
-                 WHERE api_key = ? AND media_type = ?
+                 {where_clause}
              )
              WHERE rn = 1
-             ORDER BY last_watched_at DESC, watch_seq DESC, rowid DESC",
-        )?;
-
-        let rows = stmt.query_map(params![api_key, media_type], |row| {
+             ORDER BY last_watched_at DESC, watch_seq DESC, rowid DESC"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(param_vals), |row| {
             Ok(MediaHistoryEntry {
                 imdb_id: row.get(0)?,
                 media_type: row.get(1)?,
@@ -387,56 +358,22 @@ impl DbClient {
                 last_watched_at: row.get(4)?,
             })
         })?;
+        rows.collect()
+    }
 
-        let mut results = Vec::new();
-        for item in rows {
-            results.push(item?);
-        }
-        Ok(results)
+    pub fn get_user_catalog_entries(
+        &self,
+        api_key: &str,
+        media_type: &str,
+    ) -> Result<Vec<MediaHistoryEntry>> {
+        self.query_catalog_entries(Some(api_key), media_type)
     }
 
     pub fn get_community_catalog_entries(
         &self,
         media_type: &str,
     ) -> Result<Vec<MediaHistoryEntry>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT imdb_id, media_type, stremio_id, info_hash, last_watched_at
-             FROM (
-                 SELECT
-                     imdb_id,
-                     media_type,
-                     stremio_id,
-                     info_hash,
-                     last_watched_at,
-                     watch_seq,
-                     rowid,
-                     ROW_NUMBER() OVER (
-                         PARTITION BY imdb_id
-                         ORDER BY last_watched_at DESC, watch_seq DESC, rowid DESC
-                     ) AS rn
-                 FROM media_watch_history
-                 WHERE media_type = ?
-             )
-             WHERE rn = 1
-             ORDER BY last_watched_at DESC, watch_seq DESC, rowid DESC",
-        )?;
-
-        let rows = stmt.query_map(params![media_type], |row| {
-            Ok(MediaHistoryEntry {
-                imdb_id: row.get(0)?,
-                media_type: row.get(1)?,
-                latest_stremio_id: row.get(2)?,
-                info_hash: row.get(3)?,
-                last_watched_at: row.get(4)?,
-            })
-        })?;
-
-        let mut results = Vec::new();
-        for item in rows {
-            results.push(item?);
-        }
-        Ok(results)
+        self.query_catalog_entries(None, media_type)
     }
 
     pub fn get_media_metadata(&self, imdb_id: &str) -> Result<Option<MediaMetadata>> {
@@ -517,11 +454,7 @@ impl DbClient {
              ORDER BY last_watched DESC",
         )?;
         let rows = stmt.query_map(params![api_key], |row| Ok((row.get(0)?, row.get(1)?)))?;
-        let mut results = Vec::new();
-        for item in rows {
-            results.push(item?);
-        }
-        Ok(results)
+        rows.collect()
     }
 
     pub fn get_users_with_stats(&self) -> Result<Vec<UserRecord>> {
@@ -542,12 +475,7 @@ impl DbClient {
                 last_watched_at: row.get(4)?,
             })
         })?;
-
-        let mut results = Vec::new();
-        for u in users {
-            results.push(u?);
-        }
-        Ok(results)
+        users.collect()
     }
 }
 
@@ -641,29 +569,6 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM watch_history", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 1);
-    }
-
-    #[test]
-    fn parses_stremio_media_ids() {
-        assert_eq!(
-            parse_stremio_media_id(" TT1375666 "),
-            Some((
-                "tt1375666".to_string(),
-                "tt1375666".to_string(),
-                "movie".to_string()
-            ))
-        );
-        assert_eq!(
-            parse_stremio_media_id("tt0903747:1:2"),
-            Some((
-                "tt0903747:1:2".to_string(),
-                "tt0903747".to_string(),
-                "series".to_string()
-            ))
-        );
-        assert_eq!(parse_stremio_media_id(""), None);
-        assert_eq!(parse_stremio_media_id("tt0903747:1"), None);
-        assert_eq!(parse_stremio_media_id("tt0903747:one:two"), None);
     }
 
     #[test]
