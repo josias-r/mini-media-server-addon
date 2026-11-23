@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.4.0](https://github.com/josias-r/mini-media-server-addon/compare/v0.3.0...v0.4.0) (2026-11-23)
+
+
+### Features
+
+* **streams:** filter out sample and extra video files from available streams ([4fb6c99](https://github.com/josias-r/mini-media-server-addon/commit/4fb6c9996963ee7bd9397307509b408a2bafb377))
+
+
+### Bug Fixes
+
+* **play:** prefetching next episode should not be dependent on placeholder state ([c217c58](https://github.com/josias-r/mini-media-server-addon/commit/c217c582dfc7bffdc47e937174ddb5d75da15190))
+* **qbit:** invalidate cached session cookie and retry on 403 Forbidden ([0aae638](https://github.com/josias-r/mini-media-server-addon/commit/0aae638ef5b7562ecfe04be3a7ed2d25d2f3ca82))
+* queue next episode on watch in full season torrent ([887178f](https://github.com/josias-r/mini-media-server-addon/commit/887178f341b0d60b3a87558bafc16a7d0fc60baf))
+* **state:** evict triggered torrent and file keys when torrents are deleted ([058d2fd](https://github.com/josias-r/mini-media-server-addon/commit/058d2fd23c1cbf22f14d4c03037b5aa0712bf6ff))
+* **trigger:** preserve in-progress and existing files when setting season pack priorities ([a23c984](https://github.com/josias-r/mini-media-server-addon/commit/a23c9842d6efc1d6398bc1e7a857942d5d70674e))
+* update placeholder messages for download and episode requests ([1e96fd5](https://github.com/josias-r/mini-media-server-addon/commit/1e96fd58c4442b1035532c0f68a2bca77964a220))
+
+
+### Performance Improvements
+
+* **streams:** parallelize Jackett and qBittorrent queries and add Jackett timeout ([9119a19](https://github.com/josias-r/mini-media-server-addon/commit/9119a194ed362ebeda719ea92820bd3fe0cf045a))
+
+
+### Code Refactoring
+
+* **clients:** deduplicate qBittorrent auth requests, SQLite queries, and Jackett/Cinemeta helpers ([8e97f3e](https://github.com/josias-r/mini-media-server-addon/commit/8e97f3ed63e279f235106ad6e9f49e14cfce6c19))
+* **domain:** extract pure domain layer and simplify parser and matcher ([41b99a6](https://github.com/josias-r/mini-media-server-addon/commit/41b99a65a941b802b8220ebb786a5bde01a54afe))
+* **placeholder:** split fMP4 box builder from live session and range streaming ([580e212](https://github.com/josias-r/mini-media-server-addon/commit/580e2120d5c4afc56f87c5395cffaf2b62f70ac1))
+* **routes:** consolidate route handlers and compact integration test fixtures ([5656a2c](https://github.com/josias-r/mini-media-server-addon/commit/5656a2cffd162f09a3b73f10578c3e6b8bf6e509))
+* **state:** move AppState initialization into config and unify stream builder ([95f0dc0](https://github.com/josias-r/mini-media-server-addon/commit/95f0dc05567ae2b8adf3260eebb769b1412258bc))
+
 ## [0.3.0](https://github.com/josias-r/mini-media-server-addon/compare/v0.2.1...v0.3.0) (2026-11-20)
 
 
