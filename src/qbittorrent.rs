@@ -3,7 +3,7 @@ use crate::domain::{
     compute_torrent_info_hash, extract_btih_hex, is_valid_hex_hash, torrent_has_tag,
 };
 use log::{debug, error, warn};
-use reqwest::{Client, RequestBuilder, Response, multipart};
+use reqwest::{Client, RequestBuilder, Response, StatusCode, multipart};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
@@ -140,23 +140,37 @@ impl QbitClient {
         Some(sid)
     }
 
+    async fn invalidate_session_cookie(&self) {
+        *self.session_cookie.write().await = None;
+    }
+
     async fn authed_send(
         &self,
-        build: impl FnOnce(&Client, String) -> RequestBuilder,
+        build: impl Fn(&Client, String) -> RequestBuilder,
         context: &str,
     ) -> Option<Response> {
-        let sid = self.get_session_cookie().await?;
-        match build(&self.client, sid).send().await {
-            Ok(res) if res.status().is_success() => Some(res),
-            Ok(res) => {
-                error!("Failed to {}, status: {}", context, res.status());
-                None
-            }
-            Err(e) => {
-                error!("Error {}: {}", context, e);
-                None
+        for attempt in 0..2 {
+            let sid = self.get_session_cookie().await?;
+            match build(&self.client, sid).send().await {
+                Ok(res) if res.status().is_success() => return Some(res),
+                Ok(res) if res.status() == StatusCode::FORBIDDEN && attempt == 0 => {
+                    warn!(
+                        "qBittorrent returned 403 Forbidden while trying to {}; refreshing session cookie",
+                        context
+                    );
+                    self.invalidate_session_cookie().await;
+                }
+                Ok(res) => {
+                    error!("Failed to {}, status: {}", context, res.status());
+                    return None;
+                }
+                Err(e) => {
+                    error!("Error {}: {}", context, e);
+                    return None;
+                }
             }
         }
+        None
     }
 
     async fn authed_get(&self, path: &str, context: &str) -> Option<Response> {
@@ -178,21 +192,21 @@ impl QbitClient {
     async fn authed_post_multipart(
         &self,
         path: &str,
-        form: multipart::Form,
+        build_form: impl Fn() -> multipart::Form,
         context: &str,
     ) -> bool {
         let url = format!("{}{}", self.config.qbittorrent_url, path);
         self.authed_send(
-            |c, sid| c.post(&url).header("Cookie", sid).multipart(form),
+            |c, sid| c.post(&url).header("Cookie", sid).multipart(build_form()),
             context,
         )
         .await
         .is_some()
     }
 
-    async fn send_add_torrent_form(&self, form: multipart::Form) -> bool {
+    async fn send_add_torrent_form(&self, build_form: impl Fn() -> multipart::Form) -> bool {
         let ok = self
-            .authed_post_multipart("/api/v2/torrents/add", form, "add torrent")
+            .authed_post_multipart("/api/v2/torrents/add", build_form, "add torrent")
             .await;
         if ok {
             debug!("Successfully added torrent");
@@ -202,13 +216,14 @@ impl QbitClient {
 
     pub async fn add_torrent(&self, magnet_uri: &str, tag: &str) -> bool {
         debug!("Adding torrent to qBittorrent with tag: {}", tag);
-        let form = multipart::Form::new()
-            .text("urls", magnet_uri.to_string())
-            .text("tags", tag.to_string())
-            .text("sequentialDownload", "true")
-            .text("firstLastPiecePrio", "true");
-
-        self.send_add_torrent_form(form).await
+        self.send_add_torrent_form(|| {
+            multipart::Form::new()
+                .text("urls", magnet_uri.to_string())
+                .text("tags", tag.to_string())
+                .text("sequentialDownload", "true")
+                .text("firstLastPiecePrio", "true")
+        })
+        .await
     }
 
     pub async fn add_torrent_bytes(&self, torrent_bytes: Vec<u8>, tag: &str) -> bool {
@@ -217,17 +232,18 @@ impl QbitClient {
             torrent_bytes.len(),
             tag
         );
-        let part = multipart::Part::bytes(torrent_bytes)
-            .file_name("torrent.torrent")
-            .mime_str("application/x-bittorrent")
-            .unwrap();
-        let form = multipart::Form::new()
-            .part("torrents", part)
-            .text("tags", tag.to_string())
-            .text("sequentialDownload", "true")
-            .text("firstLastPiecePrio", "true");
-
-        self.send_add_torrent_form(form).await
+        self.send_add_torrent_form(|| {
+            let part = multipart::Part::bytes(torrent_bytes.clone())
+                .file_name("torrent.torrent")
+                .mime_str("application/x-bittorrent")
+                .unwrap();
+            multipart::Form::new()
+                .part("torrents", part)
+                .text("tags", tag.to_string())
+                .text("sequentialDownload", "true")
+                .text("firstLastPiecePrio", "true")
+        })
+        .await
     }
 
     /// Resolves a magnet URI or Jackett/HTTP `.torrent` download URL (including HTTP redirects
@@ -391,13 +407,17 @@ impl QbitClient {
             priority, id_str, hash
         );
 
-        let form = multipart::Form::new()
-            .text("hash", hash)
-            .text("id", id_str)
-            .text("priority", priority.to_string());
-
-        self.authed_post_multipart("/api/v2/torrents/filePrio", form, "set file priorities")
-            .await
+        self.authed_post_multipart(
+            "/api/v2/torrents/filePrio",
+            || {
+                multipart::Form::new()
+                    .text("hash", hash.clone())
+                    .text("id", id_str.clone())
+                    .text("priority", priority.to_string())
+            },
+            "set file priorities",
+        )
+        .await
     }
 
     pub async fn resume_torrent(&self, hash: &str) -> bool {
@@ -428,5 +448,131 @@ impl QbitClient {
 
     pub async fn check_health(&self) -> bool {
         self.get_session_cookie().await.is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        Router,
+        http::{HeaderMap, header},
+        routing::{get, post},
+    };
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn refreshes_session_cookie_and_retries_on_403_forbidden() {
+        let logins = Arc::new(AtomicUsize::new(0));
+        let logins_clone = logins.clone();
+        let active_sid = Arc::new(std::sync::Mutex::new(String::new()));
+        let sid_for_login = active_sid.clone();
+        let sid_for_info = active_sid.clone();
+        let sid_for_prio = active_sid.clone();
+        let prio_attempts = Arc::new(AtomicUsize::new(0));
+        let prio_clone = prio_attempts.clone();
+
+        let app = Router::new()
+            .route(
+                "/api/v2/auth/login",
+                post(move || {
+                    let logins = logins_clone.clone();
+                    let active_sid = sid_for_login.clone();
+                    async move {
+                        let n = logins.fetch_add(1, Ordering::SeqCst) + 1;
+                        let sid = format!("SID=mock-sid-{}", n);
+                        *active_sid.lock().unwrap() = sid.clone();
+                        (StatusCode::OK, [(header::SET_COOKIE, sid)], "Ok.")
+                    }
+                }),
+            )
+            .route(
+                "/api/v2/torrents/info",
+                get(move |headers: HeaderMap| {
+                    let active_sid = sid_for_info.clone();
+                    async move {
+                        let cookie = headers
+                            .get(header::COOKIE)
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or("");
+                        if cookie == "SID=mock-sid-1" {
+                            // Simulate server restart invalidating sid-1 right before info call
+                            *active_sid.lock().unwrap() = "invalidated".to_string();
+                            return (StatusCode::FORBIDDEN, axum::Json(Vec::<QbitTorrent>::new()));
+                        }
+                        if cookie == *active_sid.lock().unwrap() {
+                            return (
+                                StatusCode::OK,
+                                axum::Json(vec![QbitTorrent {
+                                    hash: "abcd".to_string(),
+                                    tags: "tt123".to_string(),
+                                    name: "Movie".to_string(),
+                                    size: 100,
+                                    progress: 1.0,
+                                    state: "uploading".to_string(),
+                                    added_on: 1,
+                                    dlspeed: 0,
+                                    upspeed: 0,
+                                    eta: 0,
+                                }]),
+                            );
+                        }
+                        (StatusCode::FORBIDDEN, axum::Json(Vec::<QbitTorrent>::new()))
+                    }
+                }),
+            )
+            .route(
+                "/api/v2/torrents/filePrio",
+                post(move |headers: HeaderMap| {
+                    let active_sid = sid_for_prio.clone();
+                    let attempts = prio_clone.clone();
+                    async move {
+                        let n = attempts.fetch_add(1, Ordering::SeqCst);
+                        let cookie = headers
+                            .get(header::COOKIE)
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or("");
+                        if n == 0 {
+                            // Force a 403 on first multipart attempt too
+                            *active_sid.lock().unwrap() = "rotated".to_string();
+                            return StatusCode::FORBIDDEN;
+                        }
+                        if cookie == *active_sid.lock().unwrap() {
+                            StatusCode::OK
+                        } else {
+                            StatusCode::FORBIDDEN
+                        }
+                    }
+                }),
+            );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let client = QbitClient::new(Config {
+            port: 3000,
+            public_url: "http://localhost:3000".to_string(),
+            jackett_url: "http://localhost:9117".to_string(),
+            jackett_api_key: "test".to_string(),
+            jackett_search_type: "text".to_string(),
+            qbittorrent_url: format!("http://{}", addr),
+            qbittorrent_username: "admin".to_string(),
+            qbittorrent_password: "admin".to_string(),
+            download_path: "/tmp".to_string(),
+            retention_days: 0,
+        });
+
+        let torrents = client.get_all_torrents().await;
+        assert_eq!(torrents.len(), 1);
+        assert_eq!(torrents[0].hash, "abcd");
+        assert_eq!(logins.load(Ordering::SeqCst), 2);
+
+        assert!(client.set_file_priorities("abcd", &[0], 6).await);
+        assert_eq!(logins.load(Ordering::SeqCst), 3);
+        assert_eq!(prio_attempts.load(Ordering::SeqCst), 2);
     }
 }
