@@ -432,6 +432,7 @@ mod tests {
             db: Arc::new(DbClient::new(":memory:")),
             admin_session_token: "tok".to_string(),
             triggered_torrents: Arc::new(RwLock::new(HashSet::new())),
+            resolved_trigger_hashes: Arc::new(RwLock::new(HashMap::new())),
             placeholder_bank: None,
             live_sessions: Arc::new(LiveSessionStore::default()),
         };
@@ -573,6 +574,7 @@ mod tests {
             db: Arc::new(DbClient::new(":memory:")),
             admin_session_token: "tok".to_string(),
             triggered_torrents: Arc::new(RwLock::new(HashSet::new())),
+            resolved_trigger_hashes: Arc::new(RwLock::new(HashMap::new())),
             placeholder_bank: None,
             live_sessions: Arc::new(LiveSessionStore::default()),
         };

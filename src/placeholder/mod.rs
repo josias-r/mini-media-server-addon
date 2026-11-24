@@ -387,7 +387,6 @@ fn spawn_session_poller<F, Fut>(
 
     tokio::spawn(async move {
         let _guard = PollerRunningGuard(session.poller_running.clone());
-        let mut reached_ready = session.latest() == PlaceholderState::Ready;
 
         loop {
             if session.active_streams.load(Ordering::Acquire) == 0 {
@@ -411,6 +410,7 @@ fn spawn_session_poller<F, Fut>(
                 }
             }
 
+            let mut reached_ready = session.latest() == PlaceholderState::Ready;
             if !reached_ready && let Some(next_state) = poll_fn().await {
                 session.set_latest(next_state);
                 if next_state == PlaceholderState::Ready {
@@ -418,9 +418,10 @@ fn spawn_session_poller<F, Fut>(
                 }
             }
 
-            if reached_ready {
+            if reached_ready && session.latest() == PlaceholderState::Ready {
                 let _ = count_rx.borrow_and_update();
                 if session.active_streams.load(Ordering::Acquire) > 0
+                    && session.latest() == PlaceholderState::Ready
                     && count_rx.changed().await.is_err()
                 {
                     return;
@@ -986,5 +987,47 @@ mod tests {
         drop(guard);
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(!session.poller_running.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn poller_resumes_polling_after_fresh_restart_within_idle_grace() {
+        let store = LiveSessionStore::default();
+        let key = build_session_key("key", "trigger", "tt111", "cafe", None, "");
+        let (session, guard) = store
+            .acquire_session(&key, PlaceholderState::FetchingMetadata, true)
+            .await;
+
+        let polls = Arc::new(AtomicUsize::new(0));
+        let polls_clone = polls.clone();
+        spawn_session_poller(
+            session.clone(),
+            Duration::from_millis(15),
+            Duration::from_millis(150),
+            move || {
+                let p = polls_clone.clone();
+                async move {
+                    p.fetch_add(1, Ordering::Relaxed);
+                    Some(PlaceholderState::Ready)
+                }
+            },
+        );
+
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        assert_eq!(session.latest(), PlaceholderState::Ready);
+        let polls_before = polls.load(Ordering::Relaxed);
+        assert_eq!(polls_before, 1);
+
+        drop(guard);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let (s2, _g2) = store
+            .acquire_session(&key, PlaceholderState::FetchingMetadata, true)
+            .await;
+        assert!(Arc::ptr_eq(&session, &s2));
+        assert!(s2.poller_running.load(Ordering::Acquire));
+
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert!(polls.load(Ordering::Relaxed) >= 2);
+        assert_eq!(s2.latest(), PlaceholderState::Ready);
     }
 }
