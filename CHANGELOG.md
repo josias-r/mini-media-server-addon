@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/josias-r/mini-media-server-addon/compare/v0.4.0...v0.4.1) (2026-11-24)
+
+
+### Bug Fixes
+
+* **placeholder:** resume polling when session restarts within idle grace ([9ff267d](https://github.com/josias-r/mini-media-server-addon/commit/9ff267d08020b00219164a4ee9c1aac8a615301f))
+* **trigger:** route cached trigger clicks directly to stream or live state ([56ac11f](https://github.com/josias-r/mini-media-server-addon/commit/56ac11fea0aeb852217342139b6c0f5c4429dc63))
+
 ## [0.4.0](https://github.com/josias-r/mini-media-server-addon/compare/v0.3.0...v0.4.0) (2026-11-23)
 
 
