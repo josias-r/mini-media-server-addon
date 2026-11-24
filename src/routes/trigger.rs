@@ -1,8 +1,9 @@
 use super::{AppState, PlaceholderState, build_live_placeholder_redirect, require_valid_api_key};
 use crate::domain::{
-    base_imdb_id, build_torrent_tags, extract_btih_hex, match_best_qbit_file, normalize_valid_hash,
+    base_imdb_id, build_torrent_tags, extract_btih_hex, is_torrent_stalled, match_best_qbit_file,
+    normalize_valid_hash,
 };
-use crate::placeholder::has_nonzero_range_header;
+use crate::placeholder::{build_session_key, has_nonzero_range_header};
 use crate::stream_builder::get_series_params;
 use axum::{
     extract::{Path, Query, State},
@@ -27,56 +28,15 @@ fn build_trigger_key(
     format!("{}:{}", stremio_id, info_hash)
 }
 
-pub async fn trigger_download(
-    State(state): State<AppState>,
-    Path((api_key, stremio_id, info_hash)): Path<(String, String, String)>,
-    Query(params): Query<HashMap<String, String>>,
-    headers: HeaderMap,
-) -> Response {
-    if let Some(err) = require_valid_api_key(&state, &api_key) {
-        return err;
-    }
-
-    if has_nonzero_range_header(&headers) {
-        return build_live_placeholder_redirect(
-            &state.config.public_url,
-            &api_key,
-            "trigger",
-            &stremio_id,
-            &info_hash,
-            PlaceholderState::FetchingMetadata,
-            None,
-            None,
-        );
-    }
-
-    let valid_initial_hash = normalize_valid_hash(&info_hash);
-    let _ = state.db.record_media_watch(
-        &api_key,
-        &stremio_id,
-        valid_initial_hash.as_deref().unwrap_or("unknown"),
-    );
-
-    let magnet_opt = params.get("magnet").cloned();
-    let trigger_key = build_trigger_key(
-        valid_initial_hash.as_deref(),
-        magnet_opt.as_deref(),
-        &stremio_id,
-        &info_hash,
-    );
-    let already_existing = params.get("existing").is_some_and(|v| v == "1");
-    let newly_inserted = state.triggered_torrents.write().await.insert(trigger_key);
-    let placeholder = if already_existing || !newly_inserted {
-        PlaceholderState::FetchingMetadata
-    } else {
-        PlaceholderState::DownloadStarted
-    };
-
-    let task_state = state.clone();
-    let task_api_key = api_key.clone();
-    let task_stremio_id = stremio_id.clone();
-    let initial_hash_clone = valid_initial_hash.clone();
-
+fn spawn_trigger_background_task(
+    task_state: AppState,
+    task_api_key: String,
+    task_stremio_id: String,
+    initial_hash_clone: Option<String>,
+    magnet_opt: Option<String>,
+    trigger_key: String,
+    already_existing: bool,
+) {
     tokio::spawn(async move {
         let base_id = base_imdb_id(&task_stremio_id).to_string();
 
@@ -134,6 +94,11 @@ pub async fn trigger_download(
                 .write()
                 .await
                 .insert(h.clone());
+            task_state
+                .resolved_trigger_hashes
+                .write()
+                .await
+                .insert(trigger_key, h.clone());
 
             if initial_hash_clone.is_none() {
                 let _ = task_state
@@ -182,6 +147,181 @@ pub async fn trigger_download(
             );
         }
     });
+}
+
+pub async fn trigger_download(
+    State(state): State<AppState>,
+    Path((api_key, stremio_id, info_hash)): Path<(String, String, String)>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(err) = require_valid_api_key(&state, &api_key) {
+        return err;
+    }
+
+    let session_key = build_session_key(&api_key, "trigger", &stremio_id, &info_hash, None, "");
+    if has_nonzero_range_header(&headers)
+        && state.live_sessions.has_active_session(&session_key).await
+    {
+        return build_live_placeholder_redirect(
+            &state.config.public_url,
+            &api_key,
+            "trigger",
+            &stremio_id,
+            &info_hash,
+            PlaceholderState::FetchingMetadata,
+            None,
+            None,
+        );
+    }
+
+    let valid_initial_hash = normalize_valid_hash(&info_hash);
+    let magnet_opt = params.get("magnet").cloned();
+    let trigger_key = build_trigger_key(
+        valid_initial_hash.as_deref(),
+        magnet_opt.as_deref(),
+        &stremio_id,
+        &info_hash,
+    );
+    let cached_hash = state
+        .resolved_trigger_hashes
+        .read()
+        .await
+        .get(&trigger_key)
+        .cloned();
+    let candidate_hash = valid_initial_hash
+        .clone()
+        .or_else(|| magnet_opt.as_deref().and_then(extract_btih_hex))
+        .or(cached_hash);
+
+    if let Some(ref hash) = candidate_hash {
+        let qbit_lookup = tokio::time::timeout(Duration::from_millis(1500), async {
+            tokio::join!(
+                state.qbit.get_all_torrents(),
+                state.qbit.get_torrent_files(hash),
+            )
+        })
+        .await;
+
+        let (all_torrents, files) = match qbit_lookup {
+            Ok(res) => res,
+            Err(_) => {
+                log::warn!(
+                    "Timed out querying qBittorrent status for {} in trigger_download",
+                    hash
+                );
+                (Vec::new(), Vec::new())
+            }
+        };
+
+        if let Some(existing_torrent) = all_torrents
+            .iter()
+            .find(|t| t.hash.eq_ignore_ascii_case(hash))
+        {
+            if !files.is_empty() {
+                let (is_series, season, episode, expected_title) =
+                    get_series_params(&state, &stremio_id).await;
+                if let Some(chosen_idx) =
+                    match_best_qbit_file(&files, &expected_title, is_series, season, episode)
+                {
+                    let chosen_file = &files[chosen_idx];
+                    let chosen_id = chosen_file.index.unwrap_or(chosen_idx);
+                    let was_unrequested = chosen_file.priority == 0;
+                    return super::play::serve_existing_torrent_file(
+                        &state,
+                        &api_key,
+                        &stremio_id,
+                        hash,
+                        &files,
+                        Some(existing_torrent),
+                        Some(chosen_id),
+                        &chosen_file.name,
+                        was_unrequested,
+                    )
+                    .await;
+                }
+
+                let _ = state.db.record_media_watch(&api_key, &stremio_id, hash);
+                let placeholder =
+                    if is_torrent_stalled(&existing_torrent.state, existing_torrent.dlspeed) {
+                        PlaceholderState::Stalled
+                    } else {
+                        PlaceholderState::Buffering(0)
+                    };
+                return build_live_placeholder_redirect(
+                    &state.config.public_url,
+                    &api_key,
+                    "trigger",
+                    &stremio_id,
+                    hash,
+                    placeholder,
+                    None,
+                    None,
+                );
+            }
+
+            let _ = state.db.record_media_watch(&api_key, &stremio_id, hash);
+            let newly_inserted = state
+                .triggered_torrents
+                .write()
+                .await
+                .insert(trigger_key.clone());
+            if newly_inserted {
+                spawn_trigger_background_task(
+                    state.clone(),
+                    api_key.clone(),
+                    stremio_id.clone(),
+                    Some(hash.clone()),
+                    None,
+                    trigger_key,
+                    true,
+                );
+            }
+            let placeholder = if matches!(existing_torrent.state.trim(), "error" | "missingFiles") {
+                PlaceholderState::Stalled
+            } else {
+                PlaceholderState::FetchingMetadata
+            };
+            return build_live_placeholder_redirect(
+                &state.config.public_url,
+                &api_key,
+                "trigger",
+                &stremio_id,
+                hash,
+                placeholder,
+                None,
+                None,
+            );
+        }
+    }
+
+    let _ = state.db.record_media_watch(
+        &api_key,
+        &stremio_id,
+        valid_initial_hash.as_deref().unwrap_or("unknown"),
+    );
+
+    let already_existing = params.get("existing").is_some_and(|v| v == "1");
+    let newly_inserted = state
+        .triggered_torrents
+        .write()
+        .await
+        .insert(trigger_key.clone());
+    let placeholder = if already_existing || !newly_inserted {
+        PlaceholderState::FetchingMetadata
+    } else {
+        PlaceholderState::DownloadStarted
+    };
+
+    spawn_trigger_background_task(
+        state.clone(),
+        api_key.clone(),
+        stremio_id.clone(),
+        valid_initial_hash,
+        magnet_opt,
+        trigger_key,
+        already_existing,
+    );
 
     build_live_placeholder_redirect(
         &state.config.public_url,

@@ -4,83 +4,32 @@ use crate::domain::{
     find_target_file, is_file_stream_ready, is_torrent_stalled, select_next_episode_to_prefetch,
 };
 use crate::placeholder::{build_session_key, has_nonzero_range_header};
+use crate::qbittorrent::{QbitFile, QbitTorrent};
 use axum::{
     extract::{Path, Query, State},
-    http::HeaderMap,
+    http::{HeaderMap, HeaderValue, header},
     response::{IntoResponse, Redirect, Response},
 };
 use std::collections::HashMap;
 use std::time::Duration;
 
-pub async fn play_file(
-    State(state): State<AppState>,
-    Path((api_key, stremio_id, info_hash)): Path<(String, String, String)>,
-    Query(params): Query<HashMap<String, String>>,
-    headers: HeaderMap,
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn serve_existing_torrent_file(
+    state: &AppState,
+    api_key: &str,
+    stremio_id: &str,
+    info_hash: &str,
+    files: &[QbitFile],
+    parent_torrent: Option<&QbitTorrent>,
+    file_idx: Option<usize>,
+    file_path: &str,
+    was_unrequested: bool,
 ) -> Response {
-    if let Some(err) = require_valid_api_key(&state, &api_key) {
-        return err;
-    }
+    let _ = state.db.record_media_watch(api_key, stremio_id, info_hash);
 
-    let file_idx = params.get("fileIdx").and_then(|s| s.parse::<usize>().ok());
-    let file_path = params.get("filePath").cloned().unwrap_or_default();
+    let exists_on_disk = file_exists_nonempty(&state.config.download_path, file_path);
 
-    let session_key = build_session_key(
-        &api_key,
-        "play",
-        &stremio_id,
-        &info_hash,
-        file_idx,
-        &file_path,
-    );
-    if has_nonzero_range_header(&headers)
-        && state.live_sessions.has_active_session(&session_key).await
-    {
-        return build_live_placeholder_redirect(
-            &state.config.public_url,
-            &api_key,
-            "play",
-            &stremio_id,
-            &info_hash,
-            PlaceholderState::Buffering(0),
-            file_idx,
-            Some(&file_path),
-        );
-    }
-
-    let _ = state
-        .db
-        .record_media_watch(&api_key, &stremio_id, &info_hash);
-
-    let was_unrequested = params.get("unrequested").is_some_and(|v| v == "1");
-
-    let exists_on_disk = file_exists_nonempty(&state.config.download_path, &file_path);
-
-    let base_id = base_imdb_id(&stremio_id);
-    let qbit_lookup = tokio::time::timeout(Duration::from_millis(1500), async {
-        tokio::join!(
-            state.qbit.get_torrent_files(&info_hash),
-            state.qbit.get_torrents_by_tag(base_id),
-        )
-    })
-    .await;
-
-    let (files, tagged_torrents) = match qbit_lookup {
-        Ok(res) => res,
-        Err(_) => {
-            log::warn!(
-                "Timed out querying qBittorrent status for {} in play_file",
-                info_hash
-            );
-            (Vec::new(), Vec::new())
-        }
-    };
-
-    let target_file = find_target_file(&files, file_idx, &file_path);
-
-    let parent_torrent = tagged_torrents
-        .iter()
-        .find(|t| t.hash.eq_ignore_ascii_case(&info_hash));
+    let target_file = find_target_file(files, file_idx, file_path);
 
     let current_file_id = file_idx.or_else(|| target_file.map(|(i, f)| f.index.unwrap_or(i)));
 
@@ -111,9 +60,9 @@ pub async fn play_file(
     let next_episode_prefetch = if qbit_stream_ready {
         target_file.and_then(|(cur_vec_idx, _)| {
             select_next_episode_to_prefetch(
-                &stremio_id,
+                stremio_id,
                 parent_torrent.map(|t| t.name.as_str()),
-                &files,
+                files,
                 cur_vec_idx,
             )
         })
@@ -132,8 +81,8 @@ pub async fn play_file(
 
     let qbit = state.qbit.clone();
     let triggered_torrents = state.triggered_torrents.clone();
-    let hash = info_hash.clone();
-    let tags = build_torrent_tags(&stremio_id);
+    let hash = info_hash.to_string();
+    let tags = build_torrent_tags(stremio_id);
     tokio::spawn(async move {
         let mut should_resume = false;
         if let Some(cur_id) = current_file_id {
@@ -173,24 +122,104 @@ pub async fn play_file(
     if let Some(placeholder) = placeholder {
         return build_live_placeholder_redirect(
             &state.config.public_url,
+            api_key,
+            "play",
+            stremio_id,
+            info_hash,
+            placeholder,
+            file_idx,
+            Some(file_path),
+        );
+    }
+
+    let base = state.config.public_url.trim_end_matches('/');
+    let redirect_url = format!(
+        "{}/{}/stream-file/{}?filePath={}",
+        base,
+        urlencoding::encode(api_key),
+        urlencoding::encode(info_hash),
+        urlencoding::encode(file_path)
+    );
+    let mut res = Redirect::temporary(&redirect_url).into_response();
+    res.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    res
+}
+
+pub async fn play_file(
+    State(state): State<AppState>,
+    Path((api_key, stremio_id, info_hash)): Path<(String, String, String)>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(err) = require_valid_api_key(&state, &api_key) {
+        return err;
+    }
+
+    let file_idx = params.get("fileIdx").and_then(|s| s.parse::<usize>().ok());
+    let file_path = params.get("filePath").cloned().unwrap_or_default();
+
+    let session_key = build_session_key(
+        &api_key,
+        "play",
+        &stremio_id,
+        &info_hash,
+        file_idx,
+        &file_path,
+    );
+    if has_nonzero_range_header(&headers)
+        && state.live_sessions.has_active_session(&session_key).await
+    {
+        return build_live_placeholder_redirect(
+            &state.config.public_url,
             &api_key,
             "play",
             &stremio_id,
             &info_hash,
-            placeholder,
+            PlaceholderState::Buffering(0),
             file_idx,
             Some(&file_path),
         );
     }
 
-    let redirect_url = format!(
-        "{}/{}/stream-file/{}?filePath={}",
-        state.config.public_url,
-        api_key,
-        info_hash,
-        urlencoding::encode(&file_path)
-    );
-    Redirect::temporary(&redirect_url).into_response()
+    let was_unrequested = params.get("unrequested").is_some_and(|v| v == "1");
+
+    let base_id = base_imdb_id(&stremio_id);
+    let qbit_lookup = tokio::time::timeout(Duration::from_millis(1500), async {
+        tokio::join!(
+            state.qbit.get_torrent_files(&info_hash),
+            state.qbit.get_torrents_by_tag(base_id),
+        )
+    })
+    .await;
+
+    let (files, tagged_torrents) = match qbit_lookup {
+        Ok(res) => res,
+        Err(_) => {
+            log::warn!(
+                "Timed out querying qBittorrent status for {} in play_file",
+                info_hash
+            );
+            (Vec::new(), Vec::new())
+        }
+    };
+
+    let parent_torrent = tagged_torrents
+        .iter()
+        .find(|t| t.hash.eq_ignore_ascii_case(&info_hash));
+
+    serve_existing_torrent_file(
+        &state,
+        &api_key,
+        &stremio_id,
+        &info_hash,
+        &files,
+        parent_torrent,
+        file_idx,
+        &file_path,
+        was_unrequested,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -488,6 +517,7 @@ mod tests {
             db: db.clone(),
             admin_session_token: "test-admin-token".to_string(),
             triggered_torrents: Arc::new(RwLock::new(HashSet::new())),
+            resolved_trigger_hashes: Arc::new(RwLock::new(HashMap::new())),
             placeholder_bank: None,
             live_sessions: Arc::new(LiveSessionStore::default()),
         };
@@ -1197,5 +1227,252 @@ mod tests {
             c,
             MockQbitCall::FilePrio { priority, .. } if priority == "0"
         )));
+    }
+
+    #[tokio::test]
+    async fn cached_trigger_click_when_ready_redirects_to_stream_and_prefetches_without_readding() {
+        let hash = "6666777788889999aaaabbbbccccddddeeeeffff";
+        let ep1_path = "Breaking.Bad.S01.1080p/Breaking.Bad.S01E01.mkv";
+        let dir = TempDir::new("trigger_cached_ready");
+        dir.create_file(ep1_path, b"video-data");
+
+        let mut files_map = HashMap::new();
+        files_map.insert(hash.to_string(), season_pack_files_json(1, 0.05, 0));
+        let mock = MockQbitState::new(
+            vec![mock_torrent_json(
+                hash,
+                "tt0903747,series",
+                "Breaking.Bad.S01.1080p",
+                3 * GB,
+                0.02,
+                "downloading",
+                5_000_000,
+            )],
+            files_map,
+        );
+        let qbit_url = spawn_mock_qbit(mock.clone()).await;
+        let (app, _state, api_key, _db) = build_test_app(qbit_url, dir.0.to_str().unwrap());
+
+        let magnet = format!("magnet:?xt=urn:btih:{}", hash);
+        let uri = format!(
+            "/{}/trigger-download/tt0903747:1:1/{}?magnet={}",
+            api_key,
+            hash,
+            urlencoding::encode(&magnet)
+        );
+        let loc = get_redirect_location(app, &uri).await;
+        assert!(
+            loc.contains(&format!("/stream-file/{}", hash))
+                && loc.contains("Breaking.Bad.S01E01.mkv"),
+            "unexpected location: {loc}"
+        );
+
+        wait_for_add_tags(&mock).await;
+
+        let calls = mock.recorded_calls();
+        assert!(
+            !calls
+                .iter()
+                .any(|c| matches!(c, MockQbitCall::AddTorrent { .. }))
+        );
+        assert!(!calls.iter().any(|c| matches!(
+            c,
+            MockQbitCall::FilePrio { priority, .. } if priority == "0"
+        )));
+        assert!(calls.contains(&MockQbitCall::FilePrio {
+            hash: hash.to_string(),
+            ids: "0".to_string(),
+            priority: "6".to_string(),
+        }));
+        assert!(calls.contains(&MockQbitCall::FilePrio {
+            hash: hash.to_string(),
+            ids: "1".to_string(),
+            priority: "1".to_string(),
+        }));
+    }
+
+    #[tokio::test]
+    async fn cached_trigger_click_when_buffering_redirects_to_play_placeholder_with_actual_progress()
+     {
+        let hash = "777788889999aaaabbbbccccddddeeeeffff0000";
+        let ep1_path = "Breaking.Bad.S01.1080p/Breaking.Bad.S01E01.mkv";
+        let dir = TempDir::new("trigger_cached_buffering");
+        dir.create_file(ep1_path, b"partial-data");
+
+        let mut files_map = HashMap::new();
+        files_map.insert(hash.to_string(), season_pack_files_json(1, 0.01, 0));
+        let mock = MockQbitState::new(
+            vec![mock_torrent_json(
+                hash,
+                "tt0903747,series",
+                "Breaking.Bad.S01.1080p",
+                3 * GB,
+                0.005,
+                "downloading",
+                1_000_000,
+            )],
+            files_map,
+        );
+        let qbit_url = spawn_mock_qbit(mock.clone()).await;
+        let (app, _state, api_key, _db) = build_test_app(qbit_url, dir.0.to_str().unwrap());
+
+        let magnet = format!("magnet:?xt=urn:btih:{}", hash);
+        let uri = format!(
+            "/{}/trigger-download/tt0903747:1:1/{}?magnet={}",
+            api_key,
+            hash,
+            urlencoding::encode(&magnet)
+        );
+        let loc = get_redirect_location(app, &uri).await;
+        assert!(
+            loc.contains("/placeholder-live/play/") && loc.contains("initial=buffering_1"),
+            "unexpected location: {loc}"
+        );
+
+        wait_for_add_tags(&mock).await;
+        assert!(
+            !mock
+                .recorded_calls()
+                .iter()
+                .any(|c| matches!(c, MockQbitCall::AddTorrent { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn cached_trigger_click_with_unknown_hash_uses_resolved_trigger_hashes() {
+        let hash = "88889999aaaabbbbccccddddeeeeffff00001111";
+        let ep1_path = "Breaking.Bad.S01.1080p/Breaking.Bad.S01E01.mkv";
+        let dir = TempDir::new("trigger_unknown_cached");
+        dir.create_file(ep1_path, b"video-data");
+
+        let mut files_map = HashMap::new();
+        files_map.insert(hash.to_string(), season_pack_files_json(1, 1.0, 0));
+        let mock = MockQbitState::new(
+            vec![mock_torrent_json(
+                hash,
+                "tt0903747,series",
+                "Breaking.Bad.S01.1080p",
+                3 * GB,
+                0.33,
+                "uploading",
+                0,
+            )],
+            files_map,
+        );
+        let qbit_url = spawn_mock_qbit(mock.clone()).await;
+        let (app, state, api_key, _db) = build_test_app(qbit_url, dir.0.to_str().unwrap());
+
+        let torrent_url = "https://jackett.local/dl/123";
+        state
+            .resolved_trigger_hashes
+            .write()
+            .await
+            .insert(format!("tt0903747:1:1:{}", torrent_url), hash.to_string());
+
+        let uri = format!(
+            "/{}/trigger-download/tt0903747:1:1/unknown?magnet={}",
+            api_key,
+            urlencoding::encode(torrent_url)
+        );
+        let loc = get_redirect_location(app, &uri).await;
+        assert!(
+            loc.contains(&format!("/stream-file/{}", hash))
+                && loc.contains("Breaking.Bad.S01E01.mkv"),
+            "unexpected location: {loc}"
+        );
+
+        wait_for_add_tags(&mock).await;
+        assert!(
+            !mock
+                .recorded_calls()
+                .iter()
+                .any(|c| matches!(c, MockQbitCall::AddTorrent { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn trigger_nonzero_range_guards_only_active_placeholder_session() {
+        let hash = "9999aaaabbbbccccddddeeeeffff000011112222";
+        let ep1_path = "Breaking.Bad.S01.1080p/Breaking.Bad.S01E01.mkv";
+        let dir = TempDir::new("trigger_range_guard");
+        dir.create_file(ep1_path, b"video-data");
+
+        let mut files_map = HashMap::new();
+        files_map.insert(hash.to_string(), season_pack_files_json(1, 1.0, 0));
+        let mock = MockQbitState::new(
+            vec![mock_torrent_json(
+                hash,
+                "tt0903747,series",
+                "Breaking.Bad.S01.1080p",
+                3 * GB,
+                0.33,
+                "uploading",
+                0,
+            )],
+            files_map,
+        );
+        let qbit_url = spawn_mock_qbit(mock).await;
+        let (app, state, api_key, _db) = build_test_app(qbit_url, dir.0.to_str().unwrap());
+
+        let magnet = format!("magnet:?xt=urn:btih:{}", hash);
+        let uri = format!(
+            "/{}/trigger-download/tt0903747:1:1/{}?magnet={}",
+            api_key,
+            hash,
+            urlencoding::encode(&magnet)
+        );
+
+        // No active placeholder session -> non-zero Range request still routes to real stream
+        let res_no_session = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&uri)
+                    .header(header::RANGE, "bytes=1000-")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res_no_session.status(), StatusCode::TEMPORARY_REDIRECT);
+        let loc_no_session = res_no_session
+            .headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(
+            loc_no_session.contains(&format!("/stream-file/{}", hash)),
+            "unexpected location without active session: {loc_no_session}"
+        );
+
+        // Active placeholder session -> non-zero Range seek stays on placeholder
+        let session_key = build_session_key(&api_key, "trigger", "tt0903747:1:1", hash, None, "");
+        let (_session, _guard) = state
+            .live_sessions
+            .acquire_session(&session_key, PlaceholderState::DownloadStarted, true)
+            .await;
+
+        let res_active = app
+            .oneshot(
+                Request::builder()
+                    .uri(&uri)
+                    .header(header::RANGE, "bytes=1000-")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res_active.status(), StatusCode::TEMPORARY_REDIRECT);
+        let loc_active = res_active
+            .headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(
+            loc_active.contains("/placeholder-live/trigger/"),
+            "unexpected location with active session: {loc_active}"
+        );
     }
 }

@@ -4,7 +4,7 @@ use crate::qbittorrent::QbitClient;
 use dotenvy::dotenv;
 use log::info;
 use reqwest::Client;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::Path;
 use std::sync::Arc;
@@ -66,6 +66,7 @@ pub struct AppState {
     pub db: Arc<DbClient>,
     pub admin_session_token: String,
     pub triggered_torrents: Arc<RwLock<HashSet<String>>>,
+    pub resolved_trigger_hashes: Arc<RwLock<HashMap<String, String>>>,
     pub placeholder_bank: Option<Arc<PlaceholderBank>>,
     pub live_sessions: Arc<LiveSessionStore>,
 }
@@ -116,6 +117,7 @@ impl AppState {
             db: Arc::new(db),
             admin_session_token: uuid::Uuid::new_v4().to_string(),
             triggered_torrents: Arc::new(RwLock::new(HashSet::new())),
+            resolved_trigger_hashes: Arc::new(RwLock::new(HashMap::new())),
             placeholder_bank,
             live_sessions: Arc::new(LiveSessionStore::default()),
         }
@@ -130,6 +132,10 @@ impl AppState {
         let file_prefix = format!("file:{}:", hash_lower);
         let mut set = self.triggered_torrents.write().await;
         set.retain(|k| k != &hash_lower && !k.starts_with(&file_prefix));
+        drop(set);
+
+        let mut resolved = self.resolved_trigger_hashes.write().await;
+        resolved.retain(|k, v| k != &hash_lower && v != &hash_lower);
     }
 }
 
@@ -243,6 +249,20 @@ mod tests {
                 "9999888877776666555544443333222211110000".to_string(),
                 "file:9999888877776666555544443333222211110000:1".to_string(),
             ]))),
+            resolved_trigger_hashes: Arc::new(RwLock::new(HashMap::from([
+                (
+                    "aaaa1111bbbb2222cccc3333dddd4444eeee5555".to_string(),
+                    "aaaa1111bbbb2222cccc3333dddd4444eeee5555".to_string(),
+                ),
+                (
+                    "tt123:https://jackett.local/dl/1".to_string(),
+                    "aaaa1111bbbb2222cccc3333dddd4444eeee5555".to_string(),
+                ),
+                (
+                    "tt999:https://jackett.local/dl/2".to_string(),
+                    "9999888877776666555544443333222211110000".to_string(),
+                ),
+            ]))),
             placeholder_bank: None,
             live_sessions: Arc::new(LiveSessionStore::default()),
         };
@@ -255,5 +275,14 @@ mod tests {
         assert_eq!(remaining.len(), 2);
         assert!(remaining.contains("9999888877776666555544443333222211110000"));
         assert!(remaining.contains("file:9999888877776666555544443333222211110000:1"));
+
+        let remaining_resolved = state.resolved_trigger_hashes.read().await;
+        assert_eq!(remaining_resolved.len(), 1);
+        assert_eq!(
+            remaining_resolved
+                .get("tt999:https://jackett.local/dl/2")
+                .map(String::as_str),
+            Some("9999888877776666555544443333222211110000")
+        );
     }
 }
